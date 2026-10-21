@@ -100,3 +100,10 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 
 - Nova RC e detalhes/análise da compra abrem em janela modal, com o padrão visual das requisições de retirada. A janela mantém busca, materiais novos, quantidades e origem do mínimo, além do fluxo de aprovação/compra/recebimento. Erros aparecem dentro da janela; Escape/fechar ficam bloqueados durante gravação.
 - Menu agrupado em Painel, Solicitações, Fluxo de compras, Almoxarifado e Administração. A ordem operacional é solicitar, aprovar, comprar e receber; as permissões e contadores de pendências permanecem por perfil.
+
+
+## Manual e ajuda no aplicativo
+
+- A aba Manual e ajuda fica no grupo Ajuda para todos os perfis ativos. Contém índice, pesquisa sem acentos, filtro por assunto e controles de expandir/recolher os tópicos.
+- Conteúdo: primeiro acesso privado e usuários, perfis e filas, obras/prateleiras/materiais, planilhas, retirada, criação/aprovação/PDF da RC, pedidos parciais, notas e sugestões de vínculo, conciliação de entregas, mínimo, situações/cancelamentos, rastreabilidade, problemas frequentes e rotina por responsável.
+- O manual descreve as permissões e limites da interface atual e inclui exemplo numérico de compra/entrega parcial. Não executa operações nem altera dados; filtros de obra não restringem o conteúdo da ajuda.
