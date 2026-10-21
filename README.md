@@ -120,4 +120,4 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 
 ## Organização do menu por rotina
 
-- Fluxo de compras: Solicitações de compra (1), Aprovações (2), Suprimentos (3). Almoxarifado: Entrada de materiais (4), Retirada, Saldo em estoque e Estoque mínimo. Consultas e histórico: Compras e reposição, Notas fiscais e Movimentações. Administração e Ajuda ficam no final. Cada perfil mantém suas permissões e contadores. A consulta de compras abre inicialmente o histórico, com sugestões em subaba separada.
+- Fluxo de compras: Solicitações de compra, Aprovações, Suprimentos. Almoxarifado: Entrada de materiais, Retirada, Saldo em estoque e Estoque mínimo. Consultas e histórico: Compras e reposição, Notas fiscais e Movimentações. Administração e Ajuda ficam no final. Cada perfil mantém suas permissões e contadores. A consulta de compras abre inicialmente o histórico, com sugestões em subaba separada.

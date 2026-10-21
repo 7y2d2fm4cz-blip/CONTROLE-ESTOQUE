@@ -35,4 +35,4 @@ dialog.purchaseModal{position:fixed;inset:0;border:1px solid var(--line);margin:
 @media(max-width:1100px){.helpLayout{grid-template-columns:190px minmax(0,1fr);gap:15px}.helpTopicBody{padding:0 15px 15px}}
 @media(max-width:760px){.helpManual .panelHead{align-items:flex-start;flex-direction:column;gap:10px}.helpSearchBar{padding:0 15px 15px;flex-direction:column}.helpSearchBar>select{max-width:none}.helpToolbar{padding:0 15px 18px}.helpLayout{grid-template-columns:1fr;padding:0 15px 15px}.helpContents{position:static;max-height:200px}.helpTopic>summary{padding:15px}.helpTopic h3{font-size:14px}.helpTopicBody th,.helpTopicBody td{min-width:120px}.helpFooter{padding:15px}}
 
-.navStage{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:19px;height:19px;border:1px solid #65899870;border-radius:5px;color:#a4c5ce;font-size:9px;font-weight:700}.navGroup button.active .navStage{background:#087e82;color:#fff;border-color:#087e82}.navGroupTitle{margin-bottom:3px}.navGroup+.navGroup{margin-top:11px}
+.navGroupTitle{margin-bottom:3px}.navGroup+.navGroup{margin-top:11px}
