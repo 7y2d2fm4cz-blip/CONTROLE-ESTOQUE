@@ -1,8 +1,8 @@
 import type {ChatGPTUser} from '../app/chatgpt-auth';
 
-export const roles=['admin','requisitante','almoxarife','aprovador'] as const;
+export const roles=['admin','requisitante','almoxarife','aprovador','suprimentos'] as const;
 export type Role=typeof roles[number];
-export const roleNames:Record<string,string>={admin:'Administrador',requisitante:'Requisitante',almoxarife:'Almoxarife',aprovador:'Aprovador'};
+export const roleNames:Record<string,string>={admin:'Administrador',requisitante:'Requisitante',almoxarife:'Almoxarife',aprovador:'Aprovador',suprimentos:'Suprimentos'};
 const initialAdminEmail='69tjwwwnrj@privaterelay.appleid.com';
 const normalizeEmail=(value:unknown)=>String(value??'').trim().toLowerCase();
 
@@ -19,7 +19,7 @@ export function memberFor(data:any,user:ChatGPTUser) {
 
 export function accessSession(data:any,user:ChatGPTUser) {
  const member=memberFor(data,user);const active=member?.status==='active';const role:Role|null=active&&roles.includes(member.role)?member.role:null;
- return {userId:user.userId,email:user.email,displayName:user.displayName,role,roleName:role?roleNames[role]:'Sem acesso',status:member?.status||'unregistered',canManageUsers:role==='admin',canOperateStock:role==='admin'||role==='almoxarife',canSeeCosts:role==='admin'||role==='almoxarife',canApprovePurchases:role==='admin'||role==='aprovador',canViewAllPurchases:role==='admin'||role==='almoxarife'||role==='aprovador',canRequest:!!role};
+ return {userId:user.userId,email:user.email,displayName:user.displayName,role,roleName:role?roleNames[role]:'Sem acesso',status:member?.status||'unregistered',canManageUsers:role==='admin',canOperateStock:role==='admin'||role==='almoxarife',canSeeCosts:role==='admin'||role==='almoxarife',canBuy:role==='admin'||role==='suprimentos',canApprovePurchases:role==='admin'||role==='aprovador',canViewAllPurchases:role==='admin'||role==='almoxarife'||role==='aprovador'||role==='suprimentos',canRequest:!!role};
 }
 
 export function presentStock(data:any,version:number,user:ChatGPTUser) {
@@ -39,11 +39,12 @@ export function canPerform(data:any,user:ChatGPTUser,action:string,requestId?:st
  if(action==='request-access')return !session.role&&session.status==='unregistered';
  if(!session.role)return false;
  if(action==='manage-user')return session.canManageUsers;
+ if(action==='record-purchase'||action==='update-purchase')return session.canBuy;
  if(action==='approve-purchase'||action==='reject-purchase')return session.canApprovePurchases;
  if(action==='request'||action==='create-purchase')return true;
- if(action==='cancel-purchase')return session.canOperateStock||(data.purchaseRequests||[]).some((p:any)=>p.id===requestId&&p.createdById===user.userId&&['Solicitada','Aguardando aprovação'].includes(p.status));
+ if(action==='cancel-purchase')return session.role==='admin'||session.canBuy||(data.purchaseRequests||[]).some((p:any)=>p.id===requestId&&p.createdById===user.userId&&['Solicitada','Aguardando aprovação'].includes(p.status));
  if(action==='cancel-request')return session.canOperateStock||data.requests.some((r:any)=>r.id===requestId&&r.createdById===user.userId);
- return session.canOperateStock&&['receive','out','material','project','shelf','fulfill-request','extract','set-minimum','start-replenishment','submit-replenishment','close-replenishment','update-purchase'].includes(action);
+ return session.canOperateStock&&['receive','out','material','project','shelf','fulfill-request','extract','set-minimum','start-replenishment','submit-replenishment','close-replenishment'].includes(action);
 }
 
 export function bindMember(data:any,user:ChatGPTUser) {

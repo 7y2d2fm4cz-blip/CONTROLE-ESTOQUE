@@ -4,7 +4,7 @@ import ts from 'typescript';
 import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 // Reject damaged UTF-8 before building or publishing user-facing text.
-for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','lib/replenishment.ts','lib/purchase-requests.ts','lib/purchase-pdf.ts','app/api/purchase-pdf/route.ts','components/purchase-management.tsx','components/replenishment-management.tsx','components/access-management.tsx','README.md']) {
+for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','lib/replenishment.ts','lib/purchase-requests.ts','lib/purchase-pdf.ts','app/api/purchase-pdf/route.ts','components/purchase-management.tsx','components/replenishment-management.tsx','components/access-management.tsx','components/purchase-execution.tsx','components/purchase-receipt-link.tsx','README.md']) {
  const text=new TextDecoder('utf-8',{fatal:true}).decode(fs.readFileSync(path));
  assert.ok(!text.includes('\uFFFD'),`Texto com caracteres corrompidos: ${path}`);
  assert.ok(!/Ã[\u0080-\u00bf]|Â[\u0080-\u00bf]|â[\u0080-\u00bf]/u.test(text),`Codificação duplicada: ${path}`);
@@ -25,7 +25,7 @@ globalThis.__testAccess=await import('data:text/javascript;base64,'+Buffer.from(
 let source=fs.readFileSync('app/api/stock/route.ts','utf8').replace(/import \{env\} from 'cloudflare:workers';/, 'const env=globalThis.__testEnv;').replace(/import \{getChatGPTUser\} from '..\/..\/chatgpt-auth';/, 'const getChatGPTUser=async()=>globalThis.__testUser;');
 source=source.replace("import {presentStock,canPerform,bindMember,manageUser,ensureAccess} from '../../../lib/access-control';",'const {presentStock,canPerform,bindMember,manageUser,ensureAccess}=globalThis.__testAccess;');
 source=source.replace("import {syncReplenishments,isBelowMinimum,isOpenReplenishment} from '../../../lib/replenishment';",'const {syncReplenishments,isBelowMinimum,isOpenReplenishment}=globalThis.__testReplenishment;');
-source=source.replace("import {createPurchase,updatePurchase,decidePurchase} from '../../../lib/purchase-requests';",'const {createPurchase,updatePurchase,decidePurchase}=globalThis.__testPurchases;');
+source=source.replace("import {createPurchase,updatePurchase,decidePurchase,recordPurchase,linkPurchaseReceipt,refreshPurchaseFulfillment} from '../../../lib/purchase-requests';",'const {createPurchase,updatePurchase,decidePurchase,recordPurchase,linkPurchaseReceipt,refreshPurchaseFulfillment}=globalThis.__testPurchases;');
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const api=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
 const post=async body=>{const r=await api.POST(new Request('https://stock.test/api/stock',{method:'POST',headers:{origin:'https://stock.test','Content-Type':'application/json'},body:JSON.stringify(body)}));return {status:r.status,body:await r.json()}};
@@ -185,6 +185,9 @@ r=await send({action:'submit-replenishment',replenishmentId:warehouseDraft.id,qt
 globalThis.__testUser=adminUser;
 console.log('PASS: mínimo estrito, alerta automático, quantidade a definir, prevenção de duplicidade, reposição sem alterar saldo, recebimento, novo ciclo e permissões.');
 
+const fixtureApprover={userId:'fixture-approver',email:'fixture-aprovador@example.com',displayName:'Outro aprovador'};
+r=await send({action:'manage-user',email:fixtureApprover.email,name:fixtureApprover.displayName,role:'aprovador',status:'active'});assert.equal(r.status,200);
+async function approveOther(purchaseId){const previous=globalThis.__testUser;globalThis.__testUser=fixtureApprover;const result=await send({action:'approve-purchase',purchaseId});globalThis.__testUser=previous;return result;}
 // Purchase requisitions are independent from withdrawals; minimum suggestions are live shortfalls.
 const {minimumShortfall,isOpenPurchase}=globalThis.__testPurchases;
 assert.equal(minimumShortfall({minimum:100,qty:35}),65);assert.equal(minimumShortfall({minimum:10,qty:10}),0);assert.equal(minimumShortfall({minimum:0,qty:0}),0);assert.equal(minimumShortfall({minimum:0.3,qty:0.1}),0.2);
@@ -196,21 +199,21 @@ assert.deepEqual(r.body.materials,purchaseBefore.materials);assert.deepEqual(r.b
 assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.purchaseRequestId===purchase.id));
 r=await send(purchaseBody);assert.equal(r.status,400);assert.match(r.body.error,/compra aberta/);
 r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Invalid'});assert.equal(r.status,400);
-r=await send({action:'approve-purchase',purchaseId:purchase.id});assert.equal(r.status,200);
-r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Em compra',note:'Cotação em andamento'});assert.equal(r.status,200);assert.ok(isOpenPurchase(r.body.purchaseRequests[0]));
+r=await approveOther(purchase.id);assert.equal(r.status,200);
+r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Em compra',note:'Cotação em andamento'});assert.equal(r.status,400);
 r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Encerrada',note:''});assert.equal(r.status,400);
 r=await send({action:'cancel-purchase',purchaseId:purchase.id,note:'Revisar quantidade'});assert.equal(r.status,200);assert.equal(r.body.purchaseRequests[0].status,'Cancelada');assert.deepEqual(r.body.materials,purchaseBefore.materials);
 assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.status==='Definir quantidade'&&!q.purchaseRequestId));
 r=await send({...purchaseBody,items:[{materialId:id,qty:8,fromMinimum:true}]});assert.equal(r.status,200);const replacementPurchase=r.body.purchaseRequests[0];assert.equal(replacementPurchase.items[0].qty,8); // Suggested quantity remains editable.
-r=await send({action:'approve-purchase',purchaseId:replacementPurchase.id});assert.equal(r.status,200);
-r=await send({action:'update-purchase',purchaseId:replacementPurchase.id,status:'Encerrada',note:'Processo encerrado para revisão, sem recebimento'});assert.equal(r.status,200);assert.deepEqual(r.body.materials,purchaseBefore.materials);assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.status==='Definir quantidade'));
+r=await approveOther(replacementPurchase.id);assert.equal(r.status,200);
+r=await send({action:'update-purchase',purchaseId:replacementPurchase.id,status:'Encerrada',note:'Processo encerrado para revisão, sem recebimento'});assert.equal(r.status,400);r=await send({action:'cancel-purchase',purchaseId:replacementPurchase.id,note:'Revisão'});assert.equal(r.status,200);assert.deepEqual(r.body.materials,purchaseBefore.materials);assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.status==='Definir quantidade'));
 globalThis.__testUser=warehouseUser;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Compra do almoxarife',items:[{materialId:id,qty:4}]});assert.equal(r.status,200);const warehousePurchase=r.body.purchaseRequests[0];
 globalThis.__testUser=stranger;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Necessidade nova',items:[{description:'Bancada nova',unit:'UN',qty:1}]});assert.equal(r.status,200);const requesterPurchase=r.body.purchaseRequests[0];assert.ok(r.body.purchaseRequests.every(p=>p.createdById===stranger.userId));assert.ok(!r.body.purchaseRequests.some(p=>p.id===warehousePurchase.id));
 r=await send({action:'update-purchase',purchaseId:requesterPurchase.id,status:'Em compra'});assert.equal(r.status,403);
 r=await send({action:'cancel-purchase',purchaseId:warehousePurchase.id,note:'Tentativa indevida'});assert.equal(r.status,403);
 r=await send({action:'cancel-purchase',purchaseId:requesterPurchase.id,note:'Necessidade cancelada'});assert.equal(r.status,200);
 r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Outra compra',items:[{description:'Item avulso',unit:'UN',qty:1}]});assert.equal(r.status,200);const committedPurchase=r.body.purchaseRequests[0];
-globalThis.__testUser=adminUser;r=await send({action:'approve-purchase',purchaseId:committedPurchase.id});assert.equal(r.status,200);r=await send({action:'update-purchase',purchaseId:committedPurchase.id,status:'Em compra'});assert.equal(r.status,200);
+globalThis.__testUser=adminUser;r=await send({action:'approve-purchase',purchaseId:committedPurchase.id});assert.equal(r.status,200);r=await send({action:'record-purchase',purchaseId:committedPurchase.id,supplier:'Fornecedor',orderNumber:'PC-LEGADO',items:[{purchaseItemId:committedPurchase.items[0].id,qty:1,orderItem:'10'}]});assert.equal(r.status,200);
 globalThis.__testUser=stranger;r=await send({action:'cancel-purchase',purchaseId:committedPurchase.id,note:'Em andamento'});assert.equal(r.status,403);
 globalThis.__testUser=reader;r=await send(purchaseBody);assert.equal(r.status,403);assert.deepEqual((await get()).body.purchaseRequests,[]);
 globalThis.__testUser=adminUser;
@@ -231,7 +234,7 @@ globalThis.__testUser=stranger;r=await send({action:'create-purchase',project:it
 assert.equal((await download(approvalPurchaseId)).status,403);
 r=await send({action:'approve-purchase',purchaseId:approvalPurchaseId,role:'admin'});assert.equal(r.status,403);
 globalThis.__testUser=warehouseUser;r=await send({action:'approve-purchase',purchaseId:approvalPurchaseId});assert.equal(r.status,403);
-r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Em compra'});assert.equal(r.status,400);assert.match(r.body.error,/aprovada/);
+r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Em compra'});assert.equal(r.status,403);globalThis.__testUser=adminUser;
 r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Encerrada',note:'Tentativa sem aprovação'});assert.equal(r.status,400);
 globalThis.__testUser=approverUser;view=await get();assert.equal(view.body.session.role,'aprovador');assert.equal(view.body.session.canApprovePurchases,true);assert.equal(view.body.session.canOperateStock,false);assert.equal(view.body.access,undefined);assert.ok(view.body.materials.every(m=>!('average' in m)));assert.ok(view.body.purchaseRequests.some(p=>p.id===approvalPurchaseId));
 const stockBeforeApproval=JSON.parse(persisted()).materials;
@@ -244,7 +247,7 @@ r=await send({action:'reject-purchase',purchaseId:approvalPurchaseId,note:'Repet
 r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Em compra'});assert.equal(r.status,403);
 let pdfResponse=await download(approvalPurchaseId);assert.equal(pdfResponse.status,200);assert.equal(pdfResponse.headers.get('content-type'),'application/pdf');assert.equal(pdfResponse.headers.get('cache-control'),'private, no-store');let pdfBytes=new Uint8Array(await pdfResponse.arrayBuffer());assert.equal(Buffer.from(pdfBytes.slice(0,5)).toString(),'%PDF-');assert.ok((await pdfLib.PDFDocument.load(pdfBytes)).getPageCount()>0);
 globalThis.__testUser=stranger;assert.equal((await download(approvalPurchaseId)).status,200);assert.equal((await download(warehousePurchase.id)).status,404);
-globalThis.__testUser=warehouseUser;r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Em compra',note:'Compra liberada'});assert.equal(r.status,200);
+globalThis.__testUser=warehouseUser;r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Em compra',note:'Compra liberada'});assert.equal(r.status,403);
 globalThis.__testUser=adminUser;r=await send({action:'cancel-purchase',purchaseId:approvalPurchaseId,note:'Compra cancelada após análise'});assert.equal(r.status,200);assert.equal((await download(approvalPurchaseId)).status,403);
 r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Reprovação',items:[{description:'Item a reprovar',unit:'UN',qty:1}]});assert.equal(r.status,200);const rejectedId=r.body.purchaseRequests[0].id;
 globalThis.__testUser=approverUser;r=await send({action:'reject-purchase',purchaseId:rejectedId,note:'Especificação incompleta.'});assert.equal(r.status,200);assert.equal(r.body.purchaseRequests.find(p=>p.id===rejectedId).status,'Reprovada');assert.equal((await download(rejectedId)).status,403);
@@ -257,3 +260,48 @@ const specimen={...approvedPurchase,number:'RC-EXEMPLO-APROVADO',project:'Obra d
 const specimenBytes=await globalThis.__testPdf.buildPurchasePdf(specimen);const specimenDoc=await pdfLib.PDFDocument.load(specimenBytes);assert.ok(specimenDoc.getPageCount()>=3);
 fs.mkdirSync('.sites-runtime/pdf-qa',{recursive:true});fs.writeFileSync('.sites-runtime/pdf-qa/approved-purchase.pdf',specimenBytes);
 console.log('PASS: perfil aprovador, aprovação/reprovação com auditoria, bloqueio antes da aprovação, PDF protegido por perfil e aprovação, acentos e paginação.');
+
+// Procurement and receiving reconcile each approved line through the actual stock transaction.
+const {purchaseItemProgress,purchaseQueue}=globalThis.__testPurchases;
+const supplyUser={userId:'supply-1',email:'suprimentos@example.com',displayName:'Suprimentos'};
+r=await send({action:'manage-user',email:supplyUser.email,name:supplyUser.displayName,role:'suprimentos',status:'active'});assert.equal(r.status,200);
+globalThis.__testUser=supplyUser;view=await get();assert.equal(view.body.session.canBuy,true);assert.equal(view.body.session.canApprovePurchases,false);assert.equal(view.body.session.canOperateStock,false);assert.equal(view.body.access,undefined);assert.equal(view.body.invoices.length,0);assert.ok(view.body.materials.every(m=>!('average' in m)));
+for(const action of ['approve-purchase','receive','manage-user','fulfill-request']){r=await send({action});assert.equal(r.status,403);}
+globalThis.__testUser=adminUser;
+r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Segregação do administrador',items:[{description:'Teste segregação',unit:'UN',qty:1}]});assert.equal(r.status,200);const selfId=r.body.purchaseRequests[0].id;
+const beforeSelf=persisted();r=await send({action:'approve-purchase',purchaseId:selfId});assert.equal(r.status,400);assert.match(r.body.error,/outra pessoa/);assert.equal(persisted(),beforeSelf);
+globalThis.__testUser=stranger;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Compra e entrega parcial em duas linhas',items:[{materialId:id,qty:10},{description:'Válvula nova',code:'VL-NOVA',unit:'UN',qty:5}]});assert.equal(r.status,200);const flowId=r.body.purchaseRequests[0].id;
+const flow=()=>JSON.parse(persisted()).purchaseRequests.find(p=>p.id===flowId);
+const lineA=flow().items[0].id,lineB=flow().items[1].id;
+assert.equal(purchaseQueue(flow(),'approval',stranger.userId),false);assert.equal(purchaseQueue(flow(),'approval',fixtureApprover.userId),true);
+globalThis.__testUser=supplyUser;r=await send({action:'record-purchase',purchaseId:flowId,supplier:'Fornecedor fluxo',orderNumber:'PC-F1',items:[{purchaseItemId:lineA,qty:1,orderItem:'10'}]});assert.equal(r.status,400);
+r=await approveOther(flowId);assert.equal(r.status,200);assert.equal(purchaseQueue(flow(),'procurement',supplyUser.userId),true);assert.equal(purchaseQueue(flow(),'receiving',warehouseUser.userId),false);
+const po={action:'record-purchase',purchaseId:flowId,supplier:'Fornecedor fluxo',orderNumber:'PC-F1',expectedDate:'2026-11-20',items:[{purchaseItemId:lineA,qty:4,orderItem:'10'},{purchaseItemId:lineB,qty:5,orderItem:'20'}]};
+for(const actor of [stranger,warehouseUser,fixtureApprover]){globalThis.__testUser=actor;r=await send(po);assert.equal(r.status,403);}
+globalThis.__testUser=supplyUser;
+for(const bad of [{supplier:''},{expectedDate:'2026-02-30'},{items:[{purchaseItemId:lineA,qty:11,orderItem:'10'}]},{items:[{purchaseItemId:lineA,qty:1,orderItem:'10'},{purchaseItemId:lineA,qty:1,orderItem:'20'}]},{items:[{purchaseItemId:lineA,qty:1,orderItem:'10'},{purchaseItemId:lineB,qty:1,orderItem:'10'}]},{items:[{purchaseItemId:lineA,qty:1,orderItem:'10'},{purchaseItemId:'missing',qty:1,orderItem:'20'}]}]){const before=persisted();r=await send({...po,...bad});assert.equal(r.status,400);assert.equal(persisted(),before);}
+const stockBeforeOrder=JSON.parse(persisted()).materials;r=await send(po);assert.equal(r.status,200);assert.equal(flow().status,'Compra parcial');assert.deepEqual(JSON.parse(persisted()).materials,stockBeforeOrder);assert.equal(flow().receipts,undefined);assert.deepEqual(purchaseItemProgress(flow(),flow().items[0]),{requested:10,purchased:4,received:0,toPurchase:6,toReceive:10,inTransit:4});
+let unchanged=persisted();r=await send(po);assert.equal(r.status,400);assert.equal(persisted(),unchanged);
+r=await send({action:'cancel-purchase',purchaseId:flowId,note:'Não pode ocultar pendências'});assert.equal(r.status,400);assert.equal(persisted(),unchanged);
+r=await send({action:'update-purchase',purchaseId:flowId,status:'Encerrada',note:'Manual'});assert.equal(r.status,400);
+const orderA=flow().orders.find(o=>o.purchaseItemId===lineA).id,orderB=flow().orders.find(o=>o.purchaseItemId===lineB).id;
+const receiveLine=(item,order,qty,extra={})=>{const i=flow().items.find(i=>i.id===item),o=flow().orders.find(o=>o.id===order);return {description:i.description,code:i.code,unit:i.unit,materialId:i.materialId,qty,price:1,orderItem:o.orderItem,purchaseId:flowId,purchaseItemId:item,orderLineId:order,...extra};};
+const receipt={number:'FLOW-NF1',supplier:'Fornecedor fluxo',taxId:'567',series:'1',orderNumber:'PC-F1',project:itemForPurchase.project,items:[receiveLine(lineA,orderA,2),receiveLine(lineB,orderB,2)]};
+for(const actor of [stranger,fixtureApprover,supplyUser]){globalThis.__testUser=actor;r=await send({action:'receive',invoice:receipt});assert.equal(r.status,403);}
+globalThis.__testUser=warehouseUser;
+for(const bad of [{orderNumber:'ERRADO'},{project:'Obra renomeada'},{items:[receiveLine(lineA,orderA,5)]},{items:[receiveLine(lineA,orderA,1,{unit:'UN'})]},{items:[receiveLine(lineA,orderA,1,{materialId:secondId})]},{items:[receiveLine(lineA,orderA,1,{orderItem:'99'})]},{items:[receiveLine(lineA,orderA,1,{orderLineId:'missing'})]},{items:[receiveLine(lineA,orderA,1,{purchaseItemId:'missing'})]},{items:[receiveLine(lineA,orderA,1,{purchaseId:selfId})]},{items:[receiveLine(lineA,orderA,3),receiveLine(lineA,orderA,2)]},{items:[receiveLine(lineB,orderB,1),receiveLine(lineA,orderA,20)]}]){const before=persisted();r=await send({action:'receive',invoice:{...receipt,...bad}});assert.equal(r.status,400);assert.equal(persisted(),before,'Invalid allocation must roll back balances, new materials and all receipt lines');}
+unchanged=persisted();r=await post({action:'receive',version:v-1,invoice:receipt});assert.equal(r.status,400);assert.equal(persisted(),unchanged);
+r=await send({action:'receive',invoice:receipt});assert.equal(r.status,200);assert.equal(flow().status,'Recebida parcialmente');assert.equal(flow().receipts.length,2);assert.equal(flow().items[0].qty,10);assert.ok(flow().receipts.every(x=>x.invoiceId===r.body.invoices[0].id));const valveId=flow().items[1].materialId;assert.ok(valveId);assert.equal(r.body.materials.find(m=>m.id===id).qty,stockBeforeOrder.find(m=>m.id===id).qty+2);assert.equal(r.body.materials.find(m=>m.id===valveId).qty,2);
+assert.equal(purchaseQueue(flow(),'receiving',warehouseUser.userId),true);assert.equal(purchaseQueue(flow(),'procurement',supplyUser.userId),true);
+unchanged=persisted();r=await send({action:'receive',invoice:receipt});assert.equal(r.status,400);assert.equal(persisted(),unchanged);
+r=await send({action:'receive',invoice:{...receipt,number:'FLOW-UNLINKED',items:[{...receiveLine(lineA,orderA,1),purchaseId:'',purchaseItemId:'',orderLineId:''}]}});assert.equal(r.status,200);assert.equal(flow().receipts.length,2);assert.equal(purchaseItemProgress(flow(),flow().items[0]).received,2);
+r=await send({action:'receive',invoice:{...receipt,number:'FLOW-NF2',items:[receiveLine(lineA,orderA,2),receiveLine(lineB,orderB,3)]}});assert.equal(r.status,200);assert.equal(flow().status,'Recebida parcialmente');assert.equal(purchaseQueue(flow(),'receiving','x'),false);assert.equal(purchaseQueue(flow(),'procurement','x'),true);assert.equal(r.body.materials.filter(m=>m.code==='VL-NOVA').length,1);assert.equal(r.body.materials.find(m=>m.id===valveId).qty,5);
+globalThis.__testUser=supplyUser;r=await send({...po,orderNumber:'PC-F2',items:[{purchaseItemId:lineA,qty:6,orderItem:'10'}]});assert.equal(r.status,200);assert.equal(purchaseQueue(flow(),'procurement','x'),false);assert.equal(purchaseQueue(flow(),'receiving','x'),true);assert.equal(flow().status,'Recebida parcialmente');
+const orderLast=flow().orders.find(o=>o.orderNumber==='PC-F2').id;
+globalThis.__testUser=warehouseUser;r=await send({action:'receive',invoice:{...receipt,number:'FLOW-NF3',orderNumber:'PC-F2',items:[receiveLine(lineA,orderLast,5)]}});assert.equal(r.status,200);assert.equal(flow().status,'Recebida parcialmente');assert.equal(purchaseItemProgress(flow(),flow().items[0]).inTransit,1);
+r=await send({action:'receive',invoice:{...receipt,number:'FLOW-NF4',orderNumber:'PC-F2',items:[receiveLine(lineA,orderLast,1)]}});assert.equal(r.status,200);assert.equal(flow().status,'Encerrada');assert.equal(flow().closedByReceiving,true);assert.equal(flow().closedBy,warehouseUser.displayName);assert.ok(flow().closedAt);assert.equal(purchaseQueue(flow(),'receiving','x'),false);assert.equal(purchaseQueue(flow(),'procurement','x'),false);
+for(const i of flow().items){const p=purchaseItemProgress(flow(),i);assert.equal(p.requested,p.purchased);assert.equal(p.purchased,p.received);assert.equal(p.toPurchase,0);assert.equal(p.toReceive,0);}
+unchanged=persisted();r=await send({action:'receive',invoice:{...receipt,number:'FLOW-NF5',orderNumber:'PC-F2',items:[receiveLine(lineA,orderLast,1)]}});assert.equal(r.status,400);assert.equal(persisted(),unchanged);
+globalThis.__testUser=supplyUser;assert.equal((await download(flowId)).status,200);
+const legacy={status:'Encerrada',approvedAt:'2025-01-01',approvedById:'legacy',items:[{id:'legacy-line',qty:2}]};const legacyData={purchaseRequests:[legacy]};globalThis.__testPurchases.refreshPurchaseFulfillment(legacyData,new Date().toISOString(),adminUser);assert.equal(legacy.receipts,undefined);assert.equal(legacy.closedByReceiving,undefined);
+console.log('PASS: Suprimentos, aprovação por outra pessoa, filas por responsabilidade, compras e entregas parciais, vinculação NF/RC/item/pedido, saldo por pedido, limites, duplicidade, concorrência, atomicidade e encerramento exclusivo por entrada integral.');

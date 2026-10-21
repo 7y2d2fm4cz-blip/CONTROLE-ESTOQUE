@@ -1,6 +1,6 @@
-export function isOpenPurchase(request:any):boolean{return ['Solicitada','Aguardando aprovação','Aprovada','Em compra'].includes(request.status);}
+export function isOpenPurchase(request:any):boolean{return ['Solicitada','Aguardando aprovação','Aprovada','Em compra','Compra parcial','Aguardando entrega','Recebida parcialmente'].includes(request.status);}
 export function needsPurchaseApproval(request:any):boolean{return ['Solicitada','Aguardando aprovação','Em compra'].includes(request.status)&&!request.approvedAt;}
-export function canExportPurchase(request:any):boolean{return !!request.approvedAt&&!!request.approvedById&&['Aprovada','Em compra','Encerrada'].includes(request.status);}
+export function canExportPurchase(request:any):boolean{return !!request.approvedAt&&!!request.approvedById&&['Aprovada','Em compra','Compra parcial','Aguardando entrega','Recebida parcialmente','Encerrada'].includes(request.status);}
 export function minimumShortfall(material:any):number{return Number(material.minimum)>0?Math.max(0,Number((Number(material.minimum)-Number(material.qty)).toFixed(9))):0;}
 
 export function createPurchase(data:any,user:any,body:any,version:number,now:string) {
@@ -31,23 +31,80 @@ export function createPurchase(data:any,user:any,body:any,version:number,now:str
 
 export function updatePurchase(data:any,user:any,body:any,now:string){
  const request=data.purchaseRequests.find((p:any)=>p.id===body.purchaseId);if(!request||!isOpenPurchase(request))throw Error('Compra não encontrada ou já encerrada.');
- const status=body.action==='cancel-purchase'?'Cancelada':body.status;
- if(status!=='Cancelada'&&!canExportPurchase(request))throw Error('A requisição precisa ser aprovada antes de avançar para compra ou encerramento.');
- if(!['Em compra','Encerrada','Cancelada'].includes(status))throw Error('Situação de compra inválida.');
- const note=String(body.note??'').trim().slice(0,500);
- if((status==='Encerrada'||status==='Cancelada')&&!note)throw Error('Informe a referência do recebimento ou a justificativa do encerramento/cancelamento.');
- request.history??=[];request.history.unshift({date:now,by:user.displayName,status,note});request.status=status;request.updatedAt=now;request.updatedBy=user.displayName;
- // Closing a purchase tracks procurement only; the stock changes exclusively through invoice receiving.
- for(const r of data.replenishments||[]){if(r.purchaseRequestId===request.id&&!isOpenPurchase(request)){r.status=status==='Cancelada'?'Cancelada':'Encerrada';r.closedAt=now;r.closedBy=user.displayName;}}
+ if(body.action!=='cancel-purchase'&&body.status!=='Cancelada')throw Error('Registre as quantidades compradas em Suprimentos. O encerramento é automático e exclusivo pelo recebimento integral no estoque.');
+ if((request.orders||[]).length||(request.receipts||[]).length)throw Error('Não é permitido cancelar uma requisição com compra ou recebimento registrado. As pendências devem continuar em acompanhamento.');
+ const note=String(body.note??'').trim().slice(0,500);if(!note)throw Error('Informe a justificativa do cancelamento.');
+ request.history??=[];request.history.unshift({date:now,by:user.displayName,byId:user.userId,status:'Cancelada',note});request.status='Cancelada';request.updatedAt=now;request.updatedBy=user.displayName;
+ for(const r of data.replenishments||[]){if(r.purchaseRequestId===request.id){r.status='Cancelada';r.closedAt=now;r.closedBy=user.displayName;}}
 }
 
 export function decidePurchase(data:any,user:any,body:any,now:string){
  const request=data.purchaseRequests.find((p:any)=>p.id===body.purchaseId);
  if(!request||!needsPurchaseApproval(request))throw Error('Esta requisição não está aguardando aprovação.');
+ if(request.createdById===user.userId)throw Error('A aprovação deve ser realizada por outra pessoa. Você não pode decidir a própria requisição.');
  const note=String(body.note??'').trim().slice(0,500);const approved=body.action==='approve-purchase';
  if(!approved&&!note)throw Error('Informe a justificativa da reprovação.');
  request.history??=[];request.history.unshift({date:now,by:user.displayName,byId:user.userId,status:approved?'Aprovada':'Reprovada',note});
  request.status=approved?'Aprovada':'Reprovada';request.updatedAt=now;request.updatedBy=user.displayName;
  if(approved){request.approvedAt=now;request.approvedBy=user.displayName;request.approvedById=user.userId;request.approvalNote=note;}
  else{request.rejectedAt=now;request.rejectedBy=user.displayName;request.rejectedById=user.userId;request.rejectionNote=note;for(const r of data.replenishments||[]){if(r.purchaseRequestId===request.id){r.status='Cancelada';r.closedAt=now;r.closedBy=user.displayName;}}}
+}
+
+const rounded=(value:number)=>Number(value.toFixed(9));
+export function purchaseItemProgress(request:any,item:any){
+ const purchased=rounded((request.orders||[]).filter((o:any)=>o.purchaseItemId===item.id).reduce((sum:number,o:any)=>sum+Number(o.qty),0));
+ const received=rounded((request.receipts||[]).filter((r:any)=>r.purchaseItemId===item.id).reduce((sum:number,r:any)=>sum+Number(r.qty),0));
+ return {requested:Number(item.qty),purchased,received,toPurchase:Math.max(0,rounded(Number(item.qty)-purchased)),toReceive:Math.max(0,rounded(Number(item.qty)-received)),inTransit:Math.max(0,rounded(purchased-received))};
+}
+export function purchaseQueue(request:any,queue:string,userId:string){
+ if(queue==='mine')return request.createdById===userId;
+ if(queue==='approval')return needsPurchaseApproval(request)&&request.createdById!==userId;
+ if(queue==='procurement')return isOpenPurchase(request)&&canExportPurchase(request)&&request.items.some((i:any)=>purchaseItemProgress(request,i).toPurchase>0);
+ if(queue==='receiving')return isOpenPurchase(request)&&canExportPurchase(request)&&request.items.some((i:any)=>purchaseItemProgress(request,i).inTransit>0);
+ return true;
+}
+
+export function refreshPurchaseFulfillment(data:any,now:string,user:any){
+ for(const request of data.purchaseRequests||[]){
+  if(!isOpenPurchase(request)||!request.approvedAt||!(request.orders||[]).length)continue;
+  const progress=request.items.map((i:any)=>purchaseItemProgress(request,i));
+  const complete=progress.length>0&&progress.every((p:any)=>p.toReceive===0);
+  request.status=complete?'Encerrada':progress.some((p:any)=>p.received>0)?'Recebida parcialmente':progress.every((p:any)=>p.toPurchase===0)?'Aguardando entrega':'Compra parcial';
+  if(complete){request.closedAt=now;request.closedBy=user.displayName;request.closedByReceiving=true;for(const r of data.replenishments||[]){if(r.purchaseRequestId===request.id){r.status='Encerrada';r.closedAt=now;r.closedBy=user.displayName;}}}
+ }
+}
+
+export function recordPurchase(data:any,user:any,body:any,now:string){
+ const request=data.purchaseRequests.find((r:any)=>r.id===body.purchaseId);
+ if(!request||!isOpenPurchase(request)||!canExportPurchase(request))throw Error('A requisição precisa estar aprovada e aberta para registrar a compra.');
+ const text=(x:any)=>String(x??'').trim().slice(0,500);const supplier=text(body.supplier),orderNumber=text(body.orderNumber),expectedDate=text(body.expectedDate);
+ if(!supplier||!orderNumber)throw Error('Informe fornecedor e número do pedido.');
+ if(expectedDate&&(!/^\d{4}-\d{2}-\d{2}$/.test(expectedDate)||!Number.isFinite(Date.parse(expectedDate))||new Date(expectedDate).toISOString().slice(0,10)!==expectedDate))throw Error('Informe uma previsão de entrega válida.');
+ if(!Array.isArray(body.items)||!body.items.length||body.items.length>300)throw Error('Informe os itens e as quantidades compradas.');
+ const seen=new Set();const lines=body.items.map((i:any)=>{
+  const item=request.items.find((x:any)=>x.id===i.purchaseItemId);const qty=Number(i.qty),orderItem=text(i.orderItem);
+  if(!item||!Number.isFinite(qty)||qty<=0||qty>purchaseItemProgress(request,item).toPurchase)throw Error('Quantidade comprada inválida ou superior ao saldo aprovado.');
+  if(!orderItem)throw Error('Informe o item do pedido de compra.');
+  if(seen.has(item.id)||seen.has('po:'+orderItem))throw Error('Item repetido no lançamento de compra.');seen.add(item.id);seen.add('po:'+orderItem);
+  if((request.orders||[]).some((o:any)=>o.orderNumber===orderNumber&&o.orderItem===orderItem))throw Error('Este pedido e item já foram registrados nesta requisição.');
+  return {id:crypto.randomUUID(),purchaseItemId:item.id,qty,orderNumber,orderItem,supplier,expectedDate,date:now,by:user.displayName,byId:user.userId};
+ });
+ request.orders??=[];request.orders.push(...lines);request.history??=[];request.history.unshift({date:now,by:user.displayName,byId:user.userId,status:'Compra registrada',note:'Pedido '+orderNumber+' - '+supplier+' - '+lines.length+' itens'});
+ refreshPurchaseFulfillment(data,now,user);
+}
+
+// The only path that credits a purchase as delivered is the authenticated invoice receipt transaction.
+export function linkPurchaseReceipt(data:any,invoice:any,line:any,qty:number,invoiceId:string,now:string,user:any){
+ if(!line.purchaseId&&!line.purchaseItemId&&!line.orderLineId)return null;
+ const request=data.purchaseRequests.find((r:any)=>r.id===line.purchaseId);
+ if(!request||!isOpenPurchase(request)||!canExportPurchase(request)||request.project!==String(invoice.project).trim())throw Error('Requisição vinculada inválida, não aprovada ou de outra obra.');
+ const item=request.items.find((i:any)=>i.id===line.purchaseItemId);const order=(request.orders||[]).find((o:any)=>o.id===line.orderLineId&&o.purchaseItemId===line.purchaseItemId);
+ if(!item||!order)throw Error('Selecione a requisição, o item e o pedido de compra para o recebimento.');
+ if(String(line.unit).trim().toUpperCase()!==item.unit)throw Error('Unidade da nota diferente da unidade da requisição.');
+ if(line.materialId&&item.materialId&&line.materialId!==item.materialId)throw Error('Material da nota diferente do material da requisição.');
+ if(!String(invoice.orderNumber).split(/[,;]/).map((s:string)=>s.trim()).includes(order.orderNumber)||String(line.orderItem).trim()!==order.orderItem)throw Error('Número ou item do pedido da nota diferente da compra selecionada.');
+ const already=(request.receipts||[]).filter((r:any)=>r.orderLineId===order.id).reduce((sum:number,r:any)=>sum+Number(r.qty),0);
+ if(!Number.isFinite(qty)||qty<=0||rounded(already+qty)>order.qty||qty>purchaseItemProgress(request,item).toReceive)throw Error('Quantidade entregue superior ao saldo comprado ou requisitado. Confira as entregas anteriores.');
+ const receipt={id:crypto.randomUUID(),purchaseItemId:item.id,orderLineId:order.id,invoiceId,invoiceNumber:String(invoice.number),orderNumber:order.orderNumber,orderItem:order.orderItem,qty,date:now,by:user.displayName,byId:user.userId,materialId:item.materialId||''};
+ request.receipts??=[];request.receipts.push(receipt);request.history??=[];request.history.unshift({date:now,by:user.displayName,byId:user.userId,status:'Entrada no estoque',note:'NF '+invoice.number+' / Pedido '+order.orderNumber+' / Item '+order.orderItem+' / '+qty+' '+item.unit});return {request,item,order,receipt};
 }
