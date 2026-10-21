@@ -3,7 +3,7 @@ import ts from 'typescript';
 import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 // Reject damaged UTF-8 before building or publishing user-facing text.
-for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','components/access-management.tsx','README.md']) {
+for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','lib/replenishment.ts','components/replenishment-management.tsx','components/access-management.tsx','README.md']) {
  const text=new TextDecoder('utf-8',{fatal:true}).decode(fs.readFileSync(path));
  assert.ok(!text.includes('\uFFFD'),`Texto com caracteres corrompidos: ${path}`);
  assert.ok(!/Ã[\u0080-\u00bf]|Â[\u0080-\u00bf]|â[\u0080-\u00bf]/u.test(text),`Codificação duplicada: ${path}`);
@@ -14,11 +14,14 @@ const db={prepare(sql){return {bind(...values){return {async first(){return sqli
 globalThis.__testEnv={DB:db};
 const adminUser={displayName:'Teste',userId:'test',email:'69tjwwwnrj@privaterelay.appleid.com',fullName:'Teste'};
 globalThis.__testUser=adminUser;
+const replenishmentCompiled=ts.transpileModule(fs.readFileSync('lib/replenishment.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+globalThis.__testReplenishment=await import('data:text/javascript;base64,'+Buffer.from(replenishmentCompiled).toString('base64'));
 const accessCompiled=ts.transpileModule(fs.readFileSync('lib/access-control.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 globalThis.__testAccess=await import('data:text/javascript;base64,'+Buffer.from(accessCompiled).toString('base64'));
 
 let source=fs.readFileSync('app/api/stock/route.ts','utf8').replace(/import \{env\} from 'cloudflare:workers';/, 'const env=globalThis.__testEnv;').replace(/import \{getChatGPTUser\} from '..\/..\/chatgpt-auth';/, 'const getChatGPTUser=async()=>globalThis.__testUser;');
 source=source.replace("import {presentStock,canPerform,bindMember,manageUser,ensureAccess} from '../../../lib/access-control';",'const {presentStock,canPerform,bindMember,manageUser,ensureAccess}=globalThis.__testAccess;');
+source=source.replace("import {syncReplenishments,isBelowMinimum,isOpenReplenishment} from '../../../lib/replenishment';",'const {syncReplenishments,isBelowMinimum,isOpenReplenishment}=globalThis.__testReplenishment;');
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const api=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
 const post=async body=>{const r=await api.POST(new Request('https://stock.test/api/stock',{method:'POST',headers:{origin:'https://stock.test','Content-Type':'application/json'},body:JSON.stringify(body)}));return {status:r.status,body:await r.json()}};
@@ -147,3 +150,33 @@ for(const user of [reader,warehouseUser,stranger]){globalThis.__testUser=user;as
 globalThis.__testUser=null;assert.equal((await api.GET()).status,401);assert.equal((await post({action:'request-access',version:v})).status,401);
 globalThis.__testUser=adminUser;view=await get();assert.ok(view.body.access.log.length>=5);assert.ok(v>revokedVersion);
 console.log('PASS: administrador, requisitante e almoxarife; aprovação, bloqueio, identidade estável, dados filtrados e proteção de todas as operações.');
+
+// Minimum thresholds generate one draft per material, with no invented order quantity or stock change.
+const {isBelowMinimum,isOpenReplenishment}=globalThis.__testReplenishment;
+assert.equal(isBelowMinimum({qty:10,minimum:10}),false);assert.equal(isBelowMinimum({qty:0,minimum:0}),false);assert.equal(isBelowMinimum({qty:9,minimum:10}),true);
+const minState=(await get()).body;const minItem=minState.materials.find(m=>m.id===id);const minMoves=minState.moves.length;
+for(const minimum of [-1,null,'',Infinity]){r=await send({action:'set-minimum',materialId:id,minimum});assert.equal(r.status,400);}
+r=await send({action:'set-minimum',materialId:id,minimum:minItem.qty});assert.equal(r.status,200);assert.equal(r.body.replenishments.filter(q=>q.materialId===id).length,0);
+r=await send({action:'out',materialId:id,qty:1,person:'João',reference:'Teste de mínimo'});assert.equal(r.status,200);
+let replenishment=r.body.replenishments.find(q=>q.materialId===id);assert.ok(replenishment);assert.equal(replenishment.status,'Definir quantidade');assert.equal(replenishment.qty,null);
+assert.equal(r.body.materials.find(m=>m.id===id).qty,minItem.qty-1);assert.equal(r.body.moves.length,minMoves+1);
+assert.equal((await get()).body.replenishments.filter(q=>q.materialId===id&&isOpenReplenishment(q)).length,1);
+const minimumBefore=persisted();r=await send({action:'start-replenishment',materialId:id});assert.equal(r.status,400);assert.equal(persisted(),minimumBefore);
+r=await send({action:'out',materialId:id,qty:1,person:'João',reference:'Nova saída'});assert.equal(r.status,200);assert.equal(r.body.replenishments.filter(q=>q.materialId===id&&isOpenReplenishment(q)).length,1);
+const replenishmentId=replenishment.id;const balanceBeforeQuantity=r.body.materials.find(m=>m.id===id).qty;const movesBeforeQuantity=r.body.moves.length;
+for(const quantity of [0,-1,null,'',Infinity]){r=await send({action:'submit-replenishment',replenishmentId,qty:quantity});assert.equal(r.status,400);}
+r=await send({action:'submit-replenishment',replenishmentId,qty:125.5,notes:'Quantidade definida pelo almoxarife'});assert.equal(r.status,200);assert.equal(r.body.replenishments.find(q=>q.id===replenishmentId).qty,125.5);assert.equal(r.body.replenishments.find(q=>q.id===replenishmentId).status,'Solicitada');assert.equal(r.body.materials.find(m=>m.id===id).qty,balanceBeforeQuantity);assert.equal(r.body.moves.length,movesBeforeQuantity);
+r=await send({action:'close-replenishment',replenishmentId});assert.equal(r.status,400);
+r=await send({action:'receive',invoice:{...invoice,number:'REPO-1',items:[{...invoice.items[0],materialId:id,qty:2,price:14}]}});assert.equal(r.status,200);assert.equal(r.body.materials.find(m=>m.id===id).qty,minItem.qty);assert.equal(r.body.replenishments.find(q=>q.id===replenishmentId).status,'Solicitada');
+r=await send({action:'close-replenishment',replenishmentId});assert.equal(r.status,200);assert.equal(r.body.replenishments.find(q=>q.id===replenishmentId).status,'Encerrada');
+r=await send({action:'out',materialId:id,qty:0.5,person:'João',reference:'Novo ciclo'});assert.equal(r.status,200);const newDraft=r.body.replenishments.find(q=>q.materialId===id&&isOpenReplenishment(q));assert.ok(newDraft);assert.notEqual(newDraft.id,replenishmentId);assert.equal(newDraft.qty,null);
+r=await send({action:'receive',invoice:{...invoice,number:'REPO-2',items:[{...invoice.items[0],materialId:id,qty:0.5,price:14}]}});assert.equal(r.status,200);assert.equal(r.body.replenishments.find(q=>q.id===newDraft.id).status,'Regularizada');
+r=await send({action:'set-minimum',materialId:id,minimum:minItem.qty+1});assert.equal(r.status,200);const disabledDraft=r.body.replenishments.find(q=>q.materialId===id&&isOpenReplenishment(q));assert.ok(disabledDraft);
+r=await send({action:'set-minimum',materialId:id,minimum:0});assert.equal(r.status,200);assert.equal(r.body.replenishments.find(q=>q.id===disabledDraft.id).status,'Regularizada');
+globalThis.__testUser=warehouseUser;for(const action of ['set-minimum','start-replenishment','submit-replenishment','close-replenishment']){r=await send({action,materialId:id,minimum:10,replenishmentId,qty:3});assert.equal(r.status,403);}
+view=await get();assert.deepEqual(view.body.replenishments,[]);
+globalThis.__testUser=adminUser;r=await send({action:'manage-user',id:warehouseMemberId,role:'almoxarife',status:'active'});assert.equal(r.status,200);
+globalThis.__testUser=warehouseUser;r=await send({action:'set-minimum',materialId:id,minimum:minItem.qty+5});assert.equal(r.status,200);const warehouseDraft=r.body.replenishments.find(q=>q.materialId===id&&isOpenReplenishment(q));assert.ok(warehouseDraft);
+r=await send({action:'submit-replenishment',replenishmentId:warehouseDraft.id,qty:5});assert.equal(r.status,200);
+globalThis.__testUser=adminUser;
+console.log('PASS: mínimo estrito, alerta automático, quantidade a definir, prevenção de duplicidade, reposição sem alterar saldo, recebimento, novo ciclo e permissões.');

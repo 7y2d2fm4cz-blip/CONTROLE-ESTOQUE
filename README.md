@@ -42,3 +42,13 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 - E-mail de login pré-cadastrado vincula o usuário à identidade estável do site na primeira operação. Usuários sem cadastro podem solicitar aprovação; pendentes e bloqueados não consultam dados operacionais.
 - O administrador não pode bloquear nem rebaixar seu próprio perfil. As permissões são consultadas novamente a cada requisição ao servidor, incluindo a importação de notas.
 - O controle de acesso do aplicativo complementa o compartilhamento do Sites, cuja audiência e autenticação permanecem inalteradas. Nenhum convite ou mensagem é enviado pelo aplicativo.
+
+## Estoque mínimo e reposição
+
+- A aba Reposição permite selecionar materiais existentes e definir o mínimo por material/obra. Mínimo zero desativa o monitoramento.
+- Saldo estritamente menor que um mínimo positivo gera alerta e uma requisição RP com quantidade em branco (Definir quantidade), dentro da mesma gravação que altera saldo ou mínimo. Há somente uma requisição aberta por material.
+- Administrador e almoxarife definem a quantidade e solicitam a reposição. Requisitante não altera mínimos nem gerencia reposições.
+- Reposição não baixa nem aumenta estoque, não envia mensagem e não cria pedido externo. O recebimento real continua pela nota fiscal, vinculando ao material existente.
+- Rascunhos são regularizados automaticamente quando o saldo atinge o mínimo ou o monitoramento é desativado. Requisições já solicitadas permanecem no histórico e são encerradas pelo responsável após a regularização.
+- Nova queda após encerramento/regularização gera novo rascunho. O histórico é preservado.
+- A aba exibe contador de alertas. A tela atualiza os saldos ao recuperar foco, manualmente ou a cada minuto enquanto estiver visível e sem operação em andamento.

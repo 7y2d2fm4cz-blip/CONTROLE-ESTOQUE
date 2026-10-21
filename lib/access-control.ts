@@ -24,12 +24,12 @@ export function accessSession(data:any,user:ChatGPTUser) {
 
 export function presentStock(data:any,version:number,user:ChatGPTUser) {
  const session=accessSession(data,user);
- if(!session.role)return {materials:[],invoices:[],moves:[],projects:[],shelves:[],requests:[],version,session};
+ if(!session.role)return {materials:[],invoices:[],moves:[],projects:[],shelves:[],requests:[],replenishments:[],version,session};
  const {access,...stock}=data;
  if(session.role==='requisitante'){
   const requests=data.requests.filter((r:any)=>r.createdById===user.userId);
   const ids=new Set(requests.map((r:any)=>r.id));
-  return {...stock,materials:data.materials.map((m:any)=>{const {average,...safe}=m;return safe;}),invoices:[],moves:data.moves.filter((m:any)=>m.requestId&&ids.has(m.requestId)),requests,version,session};
+  return {...stock,replenishments:[],materials:data.materials.map((m:any)=>{const {average,...safe}=m;return safe;}),invoices:[],moves:data.moves.filter((m:any)=>m.requestId&&ids.has(m.requestId)),requests,version,session};
  }
  return {...stock,...(session.canManageUsers?{access}:{}),version,session};
 }
@@ -41,7 +41,7 @@ export function canPerform(data:any,user:ChatGPTUser,action:string,requestId?:st
  if(action==='manage-user')return session.canManageUsers;
  if(action==='request')return true;
  if(action==='cancel-request')return session.canOperateStock||data.requests.some((r:any)=>r.id===requestId&&r.createdById===user.userId);
- return session.canOperateStock&&['receive','out','material','project','shelf','fulfill-request','extract'].includes(action);
+ return session.canOperateStock&&['receive','out','material','project','shelf','fulfill-request','extract','set-minimum','start-replenishment','submit-replenishment','close-replenishment'].includes(action);
 }
 
 export function bindMember(data:any,user:ChatGPTUser) {
