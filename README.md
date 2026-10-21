@@ -117,3 +117,7 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 ## Separação da execução de compras
 
 - Suprimentos tem item próprio no grupo Execução de compras da barra lateral. A fila contém somente RCs aprovadas e abertas com quantidade a comprar. Fornecedor e pedido são registrados exclusivamente nesta tela; detalhes abertos em Minhas compras, Aprovações ou histórico são de acompanhamento dessa etapa. A análise fica em Aprovações. Recebimentos fica no grupo Almoxarifado. Permissões no servidor continuam limitadas a Suprimentos e administrador para registrar compras.
+
+## Organização do menu por rotina
+
+- Fluxo de compras: Solicitações de compra (1), Aprovações (2), Suprimentos (3). Almoxarifado: Entrada de materiais (4), Retirada, Saldo em estoque e Estoque mínimo. Consultas e histórico: Compras e reposição, Notas fiscais e Movimentações. Administração e Ajuda ficam no final. Cada perfil mantém suas permissões e contadores. A consulta de compras abre inicialmente o histórico, com sugestões em subaba separada.
