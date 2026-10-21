@@ -3,7 +3,7 @@ import ts from 'typescript';
 import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 // Reject damaged UTF-8 before building or publishing user-facing text.
-for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','README.md']) {
+for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','components/access-management.tsx','README.md']) {
  const text=new TextDecoder('utf-8',{fatal:true}).decode(fs.readFileSync(path));
  assert.ok(!text.includes('\uFFFD'),`Texto com caracteres corrompidos: ${path}`);
  assert.ok(!/Ã[\u0080-\u00bf]|Â[\u0080-\u00bf]|â[\u0080-\u00bf]/u.test(text),`Codificação duplicada: ${path}`);
@@ -12,7 +12,13 @@ console.log('PASS: textos em UTF-8 sem caracteres corrompidos.');
 const sqlite=new DatabaseSync(':memory:');sqlite.exec('CREATE TABLE inventory_store(id TEXT PRIMARY KEY,version INTEGER NOT NULL,data TEXT NOT NULL)');
 const db={prepare(sql){return {bind(...values){return {async first(){return sqlite.prepare(sql).get(...values)},async run(){const r=sqlite.prepare(sql).run(...values);return {meta:{changes:r.changes}}}}}}}};
 globalThis.__testEnv={DB:db};
-let source=fs.readFileSync('app/api/stock/route.ts','utf8').replace(/import \{env\} from 'cloudflare:workers';/, 'const env=globalThis.__testEnv;').replace(/import \{getChatGPTUser\} from '..\/..\/chatgpt-auth';/, 'const getChatGPTUser=async()=>({displayName:"Teste",userId:"test"});');
+const adminUser={displayName:'Teste',userId:'test',email:'69tjwwwnrj@privaterelay.appleid.com',fullName:'Teste'};
+globalThis.__testUser=adminUser;
+const accessCompiled=ts.transpileModule(fs.readFileSync('lib/access-control.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+globalThis.__testAccess=await import('data:text/javascript;base64,'+Buffer.from(accessCompiled).toString('base64'));
+
+let source=fs.readFileSync('app/api/stock/route.ts','utf8').replace(/import \{env\} from 'cloudflare:workers';/, 'const env=globalThis.__testEnv;').replace(/import \{getChatGPTUser\} from '..\/..\/chatgpt-auth';/, 'const getChatGPTUser=async()=>globalThis.__testUser;');
+source=source.replace("import {presentStock,canPerform,bindMember,manageUser,ensureAccess} from '../../../lib/access-control';",'const {presentStock,canPerform,bindMember,manageUser,ensureAccess}=globalThis.__testAccess;');
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const api=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
 const post=async body=>{const r=await api.POST(new Request('https://stock.test/api/stock',{method:'POST',headers:{origin:'https://stock.test','Content-Type':'application/json'},body:JSON.stringify(body)}));return {status:r.status,body:await r.json()}};
@@ -92,3 +98,52 @@ r=await send({...requestBody,items:[{materialId:otherMaterial.id,qty:1}]});asser
 r=await send({action:'project',id:projectId,name:'Obra final'});assert.equal(r.status,200);assert.equal(r.body.requests.find(q=>q.id===renameRequestId).project,'Obra final');
 r=await send({action:'fulfill-request',requestId:renameRequestId});assert.equal(r.status,200);
 console.log('PASS: requisição sem baixa, saldo concorrente, atendimento integral, histórico, cancelamento, renomeação e bloqueio de duplicidade.');
+
+// Authorization is enforced by the API even when a caller forges UI roles or calls endpoints directly.
+const reader={userId:'reader-1',email:'requisitante@example.com',displayName:'Requisitante',fullName:'Requisitante'};
+const warehouseUser={userId:'warehouse-1',email:'almoxarife@example.com',displayName:'Almoxarife',fullName:'Almoxarife'};
+const stranger={userId:'stranger-1',email:'novo@example.com',displayName:'Novo usuário',fullName:'Novo usuário'};
+const get=async()=>{const response=await api.GET();return {status:response.status,headers:response.headers,body:await response.json()};};
+const persisted=()=>sqlite.prepare('SELECT data FROM inventory_store WHERE id=?').get('main').data;
+const ownerBefore=await get();assert.equal(ownerBefore.body.session.role,'admin');assert.ok(ownerBefore.body.access);
+r=await send({action:'manage-user',email:reader.email,name:'Requisitante',role:'requisitante',status:'active'});assert.equal(r.status,200);const readerMemberId=r.body.access.users.find(m=>m.email===reader.email).id;
+r=await send({action:'manage-user',email:warehouseUser.email,name:'Almoxarife',role:'almoxarife',status:'active'});assert.equal(r.status,200);const warehouseMemberId=r.body.access.users.find(m=>m.email===warehouseUser.email).id;
+const adminMemberId=r.body.access.users.find(m=>m.userId===adminUser.userId).id;
+for(const body of [{id:adminMemberId,role:'requisitante',status:'active'},{id:adminMemberId,role:'admin',status:'blocked'},{email:'invalid',role:'admin',status:'active'},{email:'some@example.com',role:'owner',status:'active'},{email:reader.email,role:'admin',status:'active'}]){
+ r=await send({action:'manage-user',...body});assert.equal(r.status,400);
+}
+globalThis.__testUser=reader;
+let view=await get();assert.equal(view.body.session.role,'requisitante');assert.equal(view.headers.get('Cache-Control'),'private, no-store');assert.equal(view.body.access,undefined);assert.deepEqual(view.body.invoices,[]);assert.ok(view.body.materials.every(m=>!('average' in m)));assert.equal(view.body.requests.length,0);
+const restrictedBefore=persisted();
+for(const action of ['receive','out','material','project','shelf','fulfill-request','manage-user','unknown-action']){
+ r=await send({action,role:'admin',session:{role:'admin'},userId:adminUser.userId,requestId});assert.equal(r.status,403,action);assert.equal(persisted(),restrictedBefore);
+}
+r=await send({...requestBody,items:[{materialId:id,qty:1}]});assert.equal(r.status,200);const ownRequest=r.body.requests[0];assert.equal(ownRequest.createdById,reader.userId);assert.ok(r.body.requests.every(q=>q.createdById===reader.userId));assert.equal(r.body.access,undefined);
+globalThis.__testUser=warehouseUser;view=await get();assert.equal(view.body.session.role,'almoxarife');assert.equal(view.body.access,undefined);assert.ok(view.body.materials.some(m=>'average' in m));assert.ok(view.body.requests.some(q=>q.id===ownRequest.id));
+r=await send({action:'manage-user',id:readerMemberId,role:'admin',status:'active'});assert.equal(r.status,403);
+r=await send({action:'fulfill-request',requestId:ownRequest.id});assert.equal(r.status,200);
+r=await send({action:'material',description:'Material autorizado',project:'Obra teste',unit:'UN'});assert.equal(r.status,200);
+globalThis.__testUser=reader;view=await get();assert.ok(view.body.moves.every(m=>m.requestId===ownRequest.id));assert.ok(view.body.moves.length>0);
+r=await send({...requestBody,items:[{materialId:id,qty:1}]});assert.equal(r.status,200);const pendingOwnId=r.body.requests[0].id;
+globalThis.__testUser={...reader,userId:'impostor-1'};view=await get();assert.equal(view.body.session.role,null);assert.deepEqual(view.body.materials,[]); // A bound account cannot be taken over through its e-mail.
+globalThis.__testUser=stranger;view=await get();assert.equal(view.body.session.status,'unregistered');assert.deepEqual(view.body.materials,[]);assert.deepEqual(view.body.requests,[]);
+r=await send({action:'request',...requestBody});assert.equal(r.status,403);
+r=await send({action:'request-access',role:'admin'});assert.equal(r.status,200);assert.equal(r.body.session.status,'pending');assert.equal(r.body.session.role,null);assert.deepEqual(r.body.materials,[]);
+r=await send({action:'cancel-request',requestId:pendingOwnId});assert.equal(r.status,403);
+r=await send({action:'request-access'});assert.equal(r.status,403);
+globalThis.__testUser=adminUser;view=await get();const strangerMember=view.body.access.users.find(m=>m.userId===stranger.userId);assert.equal(strangerMember.role,'requisitante');assert.equal(strangerMember.status,'pending');
+r=await send({action:'manage-user',id:strangerMember.id,role:'requisitante',status:'active'});assert.equal(r.status,200);
+globalThis.__testUser=stranger;r=await send({action:'cancel-request',requestId:pendingOwnId});assert.equal(r.status,403);
+globalThis.__testUser=reader;r=await send({action:'cancel-request',requestId:pendingOwnId});assert.equal(r.status,200);
+globalThis.__testUser=adminUser;r=await send({action:'manage-user',id:readerMemberId,role:'requisitante',status:'blocked'});assert.equal(r.status,200);const revokedVersion=v;
+globalThis.__testUser=reader;view=await get();assert.equal(view.body.session.status,'blocked');assert.equal(view.body.session.role,null);assert.deepEqual(view.body.materials,[]);r=await send(requestBody);assert.equal(r.status,403);
+globalThis.__testUser=adminUser;r=await send({action:'manage-user',id:warehouseMemberId,role:'requisitante',status:'active'});assert.equal(r.status,200);
+globalThis.__testUser=warehouseUser;r=await send({action:'fulfill-request',requestId});assert.equal(r.status,403);
+// Extraction checks the same role before reading files, keys or calling any provider.
+let extractSource=fs.readFileSync('app/api/extract/route.ts','utf8').replace("import {env} from 'cloudflare:workers';",'const env=globalThis.__testEnv;').replace("import {getChatGPTUser} from '../../chatgpt-auth';",'const getChatGPTUser=async()=>globalThis.__testUser;').replace("import {canPerform} from '../../../lib/access-control';",'const {canPerform}=globalThis.__testAccess;');
+const extractCompiled=ts.transpileModule(extractSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+const extractApi=await import('data:text/javascript;base64,'+Buffer.from(extractCompiled).toString('base64'));
+for(const user of [reader,warehouseUser,stranger]){globalThis.__testUser=user;assert.equal((await extractApi.POST(new Request('https://stock.test/api/extract',{method:'POST',headers:{origin:'https://stock.test'}}))).status,403);}
+globalThis.__testUser=null;assert.equal((await api.GET()).status,401);assert.equal((await post({action:'request-access',version:v})).status,401);
+globalThis.__testUser=adminUser;view=await get();assert.ok(view.body.access.log.length>=5);assert.ok(v>revokedVersion);
+console.log('PASS: administrador, requisitante e almoxarife; aprovação, bloqueio, identidade estável, dados filtrados e proteção de todas as operações.');

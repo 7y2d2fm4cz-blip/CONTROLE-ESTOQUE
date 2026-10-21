@@ -33,3 +33,12 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 - Solicitar cria uma requisição pendente e não reserva nem baixa saldo. A retirada exige conferência e confirmação separadas.
 - O atendimento valida o saldo de todos os itens e grava a baixa integral com controle de concorrência. Requisições atendidas ou canceladas não podem ser processadas novamente.
 - O histórico registra o número da requisição, solicitante, destino e responsável pela entrega.
+
+## Perfis de acesso
+
+- Administrador: todas as operações, cadastro/aprovação/bloqueio de usuários e histórico de alterações de acesso. O proprietário atual é o administrador inicial; não existe promoção automática do primeiro visitante.
+- Requisitante: consulta de materiais e saldos, criação de requisições, acompanhamento e cancelamento das próprias requisições pendentes. Não recebe custos, notas fiscais, lista de usuários nem requisições de terceiros nas respostas da API.
+- Almoxarife: consulta de estoque/custos, recebimento de notas, cadastros, requisições, confirmação de retirada e cancelamento. Não gerencia usuários.
+- E-mail de login pré-cadastrado vincula o usuário à identidade estável do site na primeira operação. Usuários sem cadastro podem solicitar aprovação; pendentes e bloqueados não consultam dados operacionais.
+- O administrador não pode bloquear nem rebaixar seu próprio perfil. As permissões são consultadas novamente a cada requisição ao servidor, incluindo a importação de notas.
+- O controle de acesso do aplicativo complementa o compartilhamento do Sites, cuja audiência e autenticação permanecem inalteradas. Nenhum convite ou mensagem é enviado pelo aplicativo.
