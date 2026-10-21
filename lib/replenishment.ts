@@ -8,7 +8,7 @@ export function isOpenReplenishment(request:any):boolean {
 export function syncReplenishments(data:any,version:number,now:string) {
  data.replenishments??=[];
  for(const material of data.materials){
-  const purchase=(data.purchaseRequests||[]).find((p:any)=>['Solicitada','Em compra'].includes(p.status)&&p.items.some((i:any)=>i.materialId===material.id));
+  const purchase=(data.purchaseRequests||[]).find((p:any)=>['Solicitada','Aguardando aprovação','Aprovada','Em compra'].includes(p.status)&&p.items.some((i:any)=>i.materialId===material.id));
   const purchaseItem=purchase?.items.find((i:any)=>i.materialId===material.id);
   const open=data.replenishments.find((r:any)=>r.materialId===material.id&&isOpenReplenishment(r));
   if(isBelowMinimum(material)&&!open){

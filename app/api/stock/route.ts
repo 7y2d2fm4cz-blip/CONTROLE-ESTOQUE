@@ -1,4 +1,4 @@
-import {createPurchase,updatePurchase} from '../../../lib/purchase-requests';
+import {createPurchase,updatePurchase,decidePurchase} from '../../../lib/purchase-requests';
 import {syncReplenishments,isBelowMinimum,isOpenReplenishment} from '../../../lib/replenishment';
 import {env} from 'cloudflare:workers';
 import {getChatGPTUser} from '../../chatgpt-auth';
@@ -32,6 +32,7 @@ else if(b.action==='create-purchase'){
  const purchase=createPurchase(d,user,b,v+1,now);
  for(const i of purchase.items){if(i.materialId){const r=d.replenishments.find((r:any)=>r.materialId===i.materialId&&isOpenReplenishment(r));if(r&&!r.purchaseRequestId){r.purchaseRequestId=purchase.id;r.qty=i.qty;r.status='Solicitada';r.requestedAt=now;r.requestedBy=user.displayName;}}}
 }
+else if(b.action==='approve-purchase'||b.action==='reject-purchase'){decidePurchase(d,user,b,now);}
 else if(b.action==='update-purchase'||b.action==='cancel-purchase'){updatePurchase(d,user,b,now);}
 else if(b.action==='set-minimum'){
  const m=d.materials.find((x:any)=>x.id===b.materialId);if(!m)throw Error('Material não encontrado.');

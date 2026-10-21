@@ -1,4 +1,6 @@
-export function isOpenPurchase(request:any):boolean{return request.status==='Solicitada'||request.status==='Em compra';}
+export function isOpenPurchase(request:any):boolean{return ['Solicitada','Aguardando aprovação','Aprovada','Em compra'].includes(request.status);}
+export function needsPurchaseApproval(request:any):boolean{return ['Solicitada','Aguardando aprovação','Em compra'].includes(request.status)&&!request.approvedAt;}
+export function canExportPurchase(request:any):boolean{return !!request.approvedAt&&!!request.approvedById&&['Aprovada','Em compra','Encerrada'].includes(request.status);}
 export function minimumShortfall(material:any):number{return Number(material.minimum)>0?Math.max(0,Number((Number(material.minimum)-Number(material.qty)).toFixed(9))):0;}
 
 export function createPurchase(data:any,user:any,body:any,version:number,now:string) {
@@ -23,17 +25,29 @@ export function createPurchase(data:any,user:any,body:any,version:number,now:str
   }
   return {id:crypto.randomUUID(),materialId:m?.id||'',description,code:m?.code||text(i.code),unit,qty,fromMinimum:!!i.fromMinimum,minimumAtRequest:m?.minimum||0,balanceAtRequest:m?.qty||0};
  });
- const request={id:crypto.randomUUID(),number:'RC-'+String(version).padStart(6,'0'),project,reference,notes:text(body.notes),priority:body.priority==='Urgente'?'Urgente':'Normal',items,status:'Solicitada',createdAt:now,createdBy:user.displayName,createdById:user.userId};
+ const request={id:crypto.randomUUID(),number:'RC-'+String(version).padStart(6,'0'),project,reference,notes:text(body.notes),priority:body.priority==='Urgente'?'Urgente':'Normal',items,status:'Aguardando aprovação',createdAt:now,createdBy:user.displayName,createdById:user.userId};
  data.purchaseRequests.unshift(request);return request;
 }
 
 export function updatePurchase(data:any,user:any,body:any,now:string){
  const request=data.purchaseRequests.find((p:any)=>p.id===body.purchaseId);if(!request||!isOpenPurchase(request))throw Error('Compra não encontrada ou já encerrada.');
  const status=body.action==='cancel-purchase'?'Cancelada':body.status;
+ if(status!=='Cancelada'&&!canExportPurchase(request))throw Error('A requisição precisa ser aprovada antes de avançar para compra ou encerramento.');
  if(!['Em compra','Encerrada','Cancelada'].includes(status))throw Error('Situação de compra inválida.');
  const note=String(body.note??'').trim().slice(0,500);
  if((status==='Encerrada'||status==='Cancelada')&&!note)throw Error('Informe a referência do recebimento ou a justificativa do encerramento/cancelamento.');
  request.history??=[];request.history.unshift({date:now,by:user.displayName,status,note});request.status=status;request.updatedAt=now;request.updatedBy=user.displayName;
  // Closing a purchase tracks procurement only; the stock changes exclusively through invoice receiving.
  for(const r of data.replenishments||[]){if(r.purchaseRequestId===request.id&&!isOpenPurchase(request)){r.status=status==='Cancelada'?'Cancelada':'Encerrada';r.closedAt=now;r.closedBy=user.displayName;}}
+}
+
+export function decidePurchase(data:any,user:any,body:any,now:string){
+ const request=data.purchaseRequests.find((p:any)=>p.id===body.purchaseId);
+ if(!request||!needsPurchaseApproval(request))throw Error('Esta requisição não está aguardando aprovação.');
+ const note=String(body.note??'').trim().slice(0,500);const approved=body.action==='approve-purchase';
+ if(!approved&&!note)throw Error('Informe a justificativa da reprovação.');
+ request.history??=[];request.history.unshift({date:now,by:user.displayName,byId:user.userId,status:approved?'Aprovada':'Reprovada',note});
+ request.status=approved?'Aprovada':'Reprovada';request.updatedAt=now;request.updatedBy=user.displayName;
+ if(approved){request.approvedAt=now;request.approvedBy=user.displayName;request.approvedById=user.userId;request.approvalNote=note;}
+ else{request.rejectedAt=now;request.rejectedBy=user.displayName;request.rejectedById=user.userId;request.rejectionNote=note;for(const r of data.replenishments||[]){if(r.purchaseRequestId===request.id){r.status='Cancelada';r.closedAt=now;r.closedBy=user.displayName;}}}
 }

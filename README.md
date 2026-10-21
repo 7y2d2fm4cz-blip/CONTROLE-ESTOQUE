@@ -62,3 +62,12 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 - Requisitante cria/acompanha suas próprias RCs e cancela somente as próprias ainda Solicitadas. Administrador e almoxarife veem todas, conduzem e encerram compras.
 - Compras não alteram saldo nem enviam pedidos a fornecedores. Entradas continuam pela nota fiscal; se uma compra for encerrada com saldo ainda baixo, a necessidade de recomposição continua visível.
 - A definição de mínimos fica em Estoque mínimo. Registros RP anteriores permanecem no histórico, vinculados a RC quando houver conversão.
+
+## Aprovação de compras e PDF
+
+- O administrador atribui o perfil Aprovador na aba Usuários. O aprovador consulta todas as RCs e decide aprovação/reprovação, sem administrar pessoas, visualizar custos/notas ou movimentar estoque. Administrador também pode aprovar.
+- Fluxo: Aguardando aprovação -> Aprovada -> Em compra -> Encerrada; a reprovação exige justificativa. Cancelamento continua disponível conforme perfil e fase.
+- Nome, identidade, data/hora e observação da decisão ficam no histórico. A aprovação e a exportação não alteram estoque.
+- O servidor bloqueia Em compra/Encerrada e PDF enquanto não existir aprovação registrada. RCs antigas em andamento sem registro de aprovação precisam ser analisadas antes de avançar; históricos encerrados não recebem aprovação retroativa automática.
+- Após aprovação, o botão Baixar PDF da requisição aprovada gera A4 com obra, finalidade, solicitante, prioridade, itens/quantidades, aprovador, data de aprovação e paginação. A emissão consulta novamente a identidade, o perfil e o estado da RC. Requisitantes emitem somente suas próprias RCs aprovadas. Canceladas e reprovadas não têm emissão liberada.
+- Esse registro é uma aprovação interna do sistema, sem assinatura digital certificada ou envio automático para terceiros.

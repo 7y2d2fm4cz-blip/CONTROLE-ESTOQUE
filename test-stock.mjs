@@ -1,9 +1,10 @@
+import * as pdfLib from 'pdf-lib';
 import fs from 'node:fs';
 import ts from 'typescript';
 import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 // Reject damaged UTF-8 before building or publishing user-facing text.
-for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','lib/replenishment.ts','lib/purchase-requests.ts','components/purchase-management.tsx','components/replenishment-management.tsx','components/access-management.tsx','README.md']) {
+for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','lib/replenishment.ts','lib/purchase-requests.ts','lib/purchase-pdf.ts','app/api/purchase-pdf/route.ts','components/purchase-management.tsx','components/replenishment-management.tsx','components/access-management.tsx','README.md']) {
  const text=new TextDecoder('utf-8',{fatal:true}).decode(fs.readFileSync(path));
  assert.ok(!text.includes('\uFFFD'),`Texto com caracteres corrompidos: ${path}`);
  assert.ok(!/Ã[\u0080-\u00bf]|Â[\u0080-\u00bf]|â[\u0080-\u00bf]/u.test(text),`Codificação duplicada: ${path}`);
@@ -24,7 +25,7 @@ globalThis.__testAccess=await import('data:text/javascript;base64,'+Buffer.from(
 let source=fs.readFileSync('app/api/stock/route.ts','utf8').replace(/import \{env\} from 'cloudflare:workers';/, 'const env=globalThis.__testEnv;').replace(/import \{getChatGPTUser\} from '..\/..\/chatgpt-auth';/, 'const getChatGPTUser=async()=>globalThis.__testUser;');
 source=source.replace("import {presentStock,canPerform,bindMember,manageUser,ensureAccess} from '../../../lib/access-control';",'const {presentStock,canPerform,bindMember,manageUser,ensureAccess}=globalThis.__testAccess;');
 source=source.replace("import {syncReplenishments,isBelowMinimum,isOpenReplenishment} from '../../../lib/replenishment';",'const {syncReplenishments,isBelowMinimum,isOpenReplenishment}=globalThis.__testReplenishment;');
-source=source.replace("import {createPurchase,updatePurchase} from '../../../lib/purchase-requests';",'const {createPurchase,updatePurchase}=globalThis.__testPurchases;');
+source=source.replace("import {createPurchase,updatePurchase,decidePurchase} from '../../../lib/purchase-requests';",'const {createPurchase,updatePurchase,decidePurchase}=globalThis.__testPurchases;');
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const api=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
 const post=async body=>{const r=await api.POST(new Request('https://stock.test/api/stock',{method:'POST',headers:{origin:'https://stock.test','Content-Type':'application/json'},body:JSON.stringify(body)}));return {status:r.status,body:await r.json()}};
@@ -190,16 +191,18 @@ assert.equal(minimumShortfall({minimum:100,qty:35}),65);assert.equal(minimumShor
 const purchaseBefore=(await get()).body;const itemForPurchase=purchaseBefore.materials.find(m=>m.id===id);
 const purchaseBody={action:'create-purchase',project:itemForPurchase.project,reference:'Recomposição do mínimo',priority:'Normal',items:[{materialId:id,qty:5,fromMinimum:true},{description:'Ferramenta nova',code:'F-01',unit:'UN',qty:2}]};
 for(const bad of [{items:[]},{project:'Obra inexistente'},{reference:''},{items:[{materialId:'unknown',qty:1}]},{items:[{materialId:id,qty:0}]},{items:[{materialId:id,qty:-1}]},{items:[{materialId:id,qty:null}]},{items:[{materialId:id,qty:1},{materialId:id,qty:2}]},{items:[{description:'',unit:'UN',qty:1}]},{items:[{materialId:otherMaterial.id,qty:1}]}]){r=await send({...purchaseBody,...bad});assert.equal(r.status,400);}
-r=await send(purchaseBody);assert.equal(r.status,200);const purchase=r.body.purchaseRequests[0];assert.match(purchase.number,/^RC-/);assert.equal(purchase.items.length,2);assert.equal(purchase.items[0].fromMinimum,true);assert.equal(purchase.items[1].materialId,'');assert.equal(purchase.createdById,adminUser.userId);assert.equal(purchase.status,'Solicitada');
+r=await send(purchaseBody);assert.equal(r.status,200);const purchase=r.body.purchaseRequests[0];assert.match(purchase.number,/^RC-/);assert.equal(purchase.items.length,2);assert.equal(purchase.items[0].fromMinimum,true);assert.equal(purchase.items[1].materialId,'');assert.equal(purchase.createdById,adminUser.userId);assert.equal(purchase.status,'Aguardando aprovação');
 assert.deepEqual(r.body.materials,purchaseBefore.materials);assert.deepEqual(r.body.moves,purchaseBefore.moves);assert.deepEqual(r.body.invoices,purchaseBefore.invoices);
 assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.purchaseRequestId===purchase.id));
 r=await send(purchaseBody);assert.equal(r.status,400);assert.match(r.body.error,/compra aberta/);
 r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Invalid'});assert.equal(r.status,400);
+r=await send({action:'approve-purchase',purchaseId:purchase.id});assert.equal(r.status,200);
 r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Em compra',note:'Cotação em andamento'});assert.equal(r.status,200);assert.ok(isOpenPurchase(r.body.purchaseRequests[0]));
 r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Encerrada',note:''});assert.equal(r.status,400);
 r=await send({action:'cancel-purchase',purchaseId:purchase.id,note:'Revisar quantidade'});assert.equal(r.status,200);assert.equal(r.body.purchaseRequests[0].status,'Cancelada');assert.deepEqual(r.body.materials,purchaseBefore.materials);
 assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.status==='Definir quantidade'&&!q.purchaseRequestId));
 r=await send({...purchaseBody,items:[{materialId:id,qty:8,fromMinimum:true}]});assert.equal(r.status,200);const replacementPurchase=r.body.purchaseRequests[0];assert.equal(replacementPurchase.items[0].qty,8); // Suggested quantity remains editable.
+r=await send({action:'approve-purchase',purchaseId:replacementPurchase.id});assert.equal(r.status,200);
 r=await send({action:'update-purchase',purchaseId:replacementPurchase.id,status:'Encerrada',note:'Processo encerrado para revisão, sem recebimento'});assert.equal(r.status,200);assert.deepEqual(r.body.materials,purchaseBefore.materials);assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.status==='Definir quantidade'));
 globalThis.__testUser=warehouseUser;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Compra do almoxarife',items:[{materialId:id,qty:4}]});assert.equal(r.status,200);const warehousePurchase=r.body.purchaseRequests[0];
 globalThis.__testUser=stranger;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Necessidade nova',items:[{description:'Bancada nova',unit:'UN',qty:1}]});assert.equal(r.status,200);const requesterPurchase=r.body.purchaseRequests[0];assert.ok(r.body.purchaseRequests.every(p=>p.createdById===stranger.userId));assert.ok(!r.body.purchaseRequests.some(p=>p.id===warehousePurchase.id));
@@ -207,8 +210,50 @@ r=await send({action:'update-purchase',purchaseId:requesterPurchase.id,status:'E
 r=await send({action:'cancel-purchase',purchaseId:warehousePurchase.id,note:'Tentativa indevida'});assert.equal(r.status,403);
 r=await send({action:'cancel-purchase',purchaseId:requesterPurchase.id,note:'Necessidade cancelada'});assert.equal(r.status,200);
 r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Outra compra',items:[{description:'Item avulso',unit:'UN',qty:1}]});assert.equal(r.status,200);const committedPurchase=r.body.purchaseRequests[0];
-globalThis.__testUser=adminUser;r=await send({action:'update-purchase',purchaseId:committedPurchase.id,status:'Em compra'});assert.equal(r.status,200);
+globalThis.__testUser=adminUser;r=await send({action:'approve-purchase',purchaseId:committedPurchase.id});assert.equal(r.status,200);r=await send({action:'update-purchase',purchaseId:committedPurchase.id,status:'Em compra'});assert.equal(r.status,200);
 globalThis.__testUser=stranger;r=await send({action:'cancel-purchase',purchaseId:committedPurchase.id,note:'Em andamento'});assert.equal(r.status,403);
 globalThis.__testUser=reader;r=await send(purchaseBody);assert.equal(r.status,403);assert.deepEqual((await get()).body.purchaseRequests,[]);
 globalThis.__testUser=adminUser;
 console.log('PASS: compras com múltiplos itens e materiais novos, sugestão mínimo menos saldo, quantidade editável, duplicidade, histórico, cancelamento, segregação e nenhum efeito no estoque.');
+
+// Approval is mandatory on the server, including direct PDF downloads and legacy purchases.
+globalThis.__pdfLib=pdfLib;
+const pdfSource=fs.readFileSync('lib/purchase-pdf.ts','utf8').replace("import {PDFDocument,StandardFonts,rgb} from 'pdf-lib';",'const {PDFDocument,StandardFonts,rgb}=globalThis.__pdfLib;');
+const pdfCompiled=ts.transpileModule(pdfSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+globalThis.__testPdf=await import('data:text/javascript;base64,'+Buffer.from(pdfCompiled).toString('base64'));
+const routePdfSource=fs.readFileSync('app/api/purchase-pdf/route.ts','utf8').replace("import {env} from 'cloudflare:workers';",'const env=globalThis.__testEnv;').replace("import {getChatGPTUser} from '../../chatgpt-auth';",'const getChatGPTUser=async()=>globalThis.__testUser;').replace("import {accessSession} from '../../../lib/access-control';",'const {accessSession}=globalThis.__testAccess;').replace("import {canExportPurchase} from '../../../lib/purchase-requests';",'const {canExportPurchase}=globalThis.__testPurchases;').replace("import {buildPurchasePdf} from '../../../lib/purchase-pdf';",'const {buildPurchasePdf}=globalThis.__testPdf;');
+const routePdfCompiled=ts.transpileModule(routePdfSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+const pdfApi=await import('data:text/javascript;base64,'+Buffer.from(routePdfCompiled).toString('base64'));
+const download=async purchaseId=>pdfApi.GET(new Request('https://stock.test/api/purchase-pdf?purchaseId='+encodeURIComponent(purchaseId)));
+const approverUser={userId:'approver-1',email:'aprovador@example.com',displayName:'Aprovador de Compras',fullName:'Aprovador de Compras'};
+r=await send({action:'manage-user',email:approverUser.email,name:approverUser.displayName,role:'aprovador',status:'active'});assert.equal(r.status,200);const approverMemberId=r.body.access.users.find(m=>m.email===approverUser.email).id;
+globalThis.__testUser=stranger;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Teste do fluxo de aprovação',items:[{description:'Painel elétrico - proteção e medição',code:'PN-01',unit:'UN',qty:2}]});assert.equal(r.status,200);const approvalPurchaseId=r.body.purchaseRequests[0].id;assert.equal(r.body.purchaseRequests[0].status,'Aguardando aprovação');
+assert.equal((await download(approvalPurchaseId)).status,403);
+r=await send({action:'approve-purchase',purchaseId:approvalPurchaseId,role:'admin'});assert.equal(r.status,403);
+globalThis.__testUser=warehouseUser;r=await send({action:'approve-purchase',purchaseId:approvalPurchaseId});assert.equal(r.status,403);
+r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Em compra'});assert.equal(r.status,400);assert.match(r.body.error,/aprovada/);
+r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Encerrada',note:'Tentativa sem aprovação'});assert.equal(r.status,400);
+globalThis.__testUser=approverUser;view=await get();assert.equal(view.body.session.role,'aprovador');assert.equal(view.body.session.canApprovePurchases,true);assert.equal(view.body.session.canOperateStock,false);assert.equal(view.body.access,undefined);assert.ok(view.body.materials.every(m=>!('average' in m)));assert.ok(view.body.purchaseRequests.some(p=>p.id===approvalPurchaseId));
+const stockBeforeApproval=JSON.parse(persisted()).materials;
+r=await send({action:'manage-user',email:'fake@example.com',role:'admin',status:'active'});assert.equal(r.status,403);
+r=await send({action:'fulfill-request',requestId});assert.equal(r.status,403);
+r=await send({action:'reject-purchase',purchaseId:approvalPurchaseId,note:' '});assert.equal(r.status,400);
+r=await send({action:'approve-purchase',purchaseId:approvalPurchaseId,note:'Escopo e quantidades conferidos.'});assert.equal(r.status,200);const approvedPurchase=r.body.purchaseRequests.find(p=>p.id===approvalPurchaseId);assert.equal(approvedPurchase.status,'Aprovada');assert.equal(approvedPurchase.approvedById,approverUser.userId);assert.ok(approvedPurchase.approvedAt);assert.equal(approvedPurchase.approvalNote,'Escopo e quantidades conferidos.');assert.deepEqual(JSON.parse(persisted()).materials,stockBeforeApproval);
+r=await send({action:'approve-purchase',purchaseId:approvalPurchaseId});assert.equal(r.status,400);
+r=await send({action:'reject-purchase',purchaseId:approvalPurchaseId,note:'Repetida'});assert.equal(r.status,400);
+r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Em compra'});assert.equal(r.status,403);
+let pdfResponse=await download(approvalPurchaseId);assert.equal(pdfResponse.status,200);assert.equal(pdfResponse.headers.get('content-type'),'application/pdf');assert.equal(pdfResponse.headers.get('cache-control'),'private, no-store');let pdfBytes=new Uint8Array(await pdfResponse.arrayBuffer());assert.equal(Buffer.from(pdfBytes.slice(0,5)).toString(),'%PDF-');assert.ok((await pdfLib.PDFDocument.load(pdfBytes)).getPageCount()>0);
+globalThis.__testUser=stranger;assert.equal((await download(approvalPurchaseId)).status,200);assert.equal((await download(warehousePurchase.id)).status,404);
+globalThis.__testUser=warehouseUser;r=await send({action:'update-purchase',purchaseId:approvalPurchaseId,status:'Em compra',note:'Compra liberada'});assert.equal(r.status,200);
+globalThis.__testUser=adminUser;r=await send({action:'cancel-purchase',purchaseId:approvalPurchaseId,note:'Compra cancelada após análise'});assert.equal(r.status,200);assert.equal((await download(approvalPurchaseId)).status,403);
+r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Reprovação',items:[{description:'Item a reprovar',unit:'UN',qty:1}]});assert.equal(r.status,200);const rejectedId=r.body.purchaseRequests[0].id;
+globalThis.__testUser=approverUser;r=await send({action:'reject-purchase',purchaseId:rejectedId,note:'Especificação incompleta.'});assert.equal(r.status,200);assert.equal(r.body.purchaseRequests.find(p=>p.id===rejectedId).status,'Reprovada');assert.equal((await download(rejectedId)).status,403);
+globalThis.__testUser=adminUser;r=await send({action:'manage-user',id:approverMemberId,role:'aprovador',status:'blocked'});assert.equal(r.status,200);
+globalThis.__testUser=approverUser;r=await send({action:'approve-purchase',purchaseId:warehousePurchase.id});assert.equal(r.status,403);assert.equal((await download(approvalPurchaseId)).status,403);
+globalThis.__testUser=null;assert.equal((await download(approvalPurchaseId)).status,401);
+globalThis.__testUser=adminUser;
+// A long multi-page specimen exercises page breaks, accents, approval metadata and long tokens.
+const specimen={...approvedPurchase,number:'RC-EXEMPLO-APROVADO',project:'Obra de modernização elétrica - Área São João',reference:'Aquisição de materiais para proteção, medição e recomposição de estoque mínimo.',status:'Aprovada',notes:'Conferir as especificações técnicas e a identificação dos materiais antes da aquisição.',items:Array.from({length:55},(_,index)=>({id:String(index),description:index===10?'Especificação longa: '+('proteção elétrica e automação '.repeat(15)):'Material '+String(index+1).padStart(2,'0')+' - Conexão elétrica para instalação e proteção de painéis',code:'MAT-'+String(index+1).padStart(4,'0'),unit:'UN',qty:index+0.5,fromMinimum:index%2===0}))};
+const specimenBytes=await globalThis.__testPdf.buildPurchasePdf(specimen);const specimenDoc=await pdfLib.PDFDocument.load(specimenBytes);assert.ok(specimenDoc.getPageCount()>=3);
+fs.mkdirSync('.sites-runtime/pdf-qa',{recursive:true});fs.writeFileSync('.sites-runtime/pdf-qa/approved-purchase.pdf',specimenBytes);
+console.log('PASS: perfil aprovador, aprovação/reprovação com auditoria, bloqueio antes da aprovação, PDF protegido por perfil e aprovação, acentos e paginação.');
