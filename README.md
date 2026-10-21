@@ -121,3 +121,7 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 ## Organização do menu por rotina
 
 - Fluxo de compras: Solicitações de compra, Aprovações, Suprimentos. Almoxarifado: Entrada de materiais, Retirada, Saldo em estoque e Estoque mínimo. Consultas e histórico: Compras e reposição, Notas fiscais e Movimentações. Administração e Ajuda ficam no final. Cada perfil mantém suas permissões e contadores. A consulta de compras abre inicialmente o histórico, com sugestões em subaba separada.
+
+## Nota fiscal nos detalhes da entrada
+
+- Entrada de materiais / Ver detalhes oferece Receber nota fiscal para importar XML/PDF/imagem ou fotografar a NF mantendo a obra e a RC selecionadas. Referências únicas de pedido/item/unidade vinculam a linha à compra pendente; linhas sem identificação inequívoca exigem seleção na conferência. Quantidades e identificadores reais da NF são preservados. Preencher manualmente continua disponível. Nenhum saldo muda antes da confirmação da entrada.

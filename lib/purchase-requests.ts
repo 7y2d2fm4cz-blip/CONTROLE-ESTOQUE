@@ -108,3 +108,17 @@ export function linkPurchaseReceipt(data:any,invoice:any,line:any,qty:number,inv
  const receipt={id:crypto.randomUUID(),purchaseItemId:item.id,orderLineId:order.id,invoiceId,invoiceNumber:String(invoice.number),orderNumber:order.orderNumber,orderItem:order.orderItem,qty,date:now,by:user.displayName,byId:user.userId,materialId:item.materialId||''};
  request.receipts??=[];request.receipts.push(receipt);request.history??=[];request.history.unshift({date:now,by:user.displayName,byId:user.userId,status:'Entrada no estoque',note:'NF '+invoice.number+' / Pedido '+order.orderNumber+' / Item '+order.orderItem+' / '+qty+' '+item.unit});return {request,item,order,receipt};
 }
+
+// Keep the selected RC while importing a real NF; bind only unambiguous purchase references.
+export function prepareInvoiceForPurchase(invoice:any,request:any){
+ const pending=(request.orders||[]).filter((o:any)=>rounded(Number(o.qty)-(request.receipts||[]).filter((r:any)=>r.orderLineId===o.id).reduce((sum:number,r:any)=>sum+Number(r.qty),0))>0);
+ const numbers=Array.from(new Set(pending.map((o:any)=>String(o.orderNumber))));
+ const orderNumber=String(invoice.orderNumber||'').trim()||(numbers.length===1?numbers[0]:'');
+ const references=String(orderNumber).split(/[,;]/).map(s=>s.trim());let unresolved=0;
+ const items=(invoice.items||[]).map((line:any)=>{
+  const candidates=pending.filter((o:any)=>references.includes(String(o.orderNumber))&&String(o.orderItem)===String(line.orderItem||'').trim()&&request.items.some((i:any)=>i.id===o.purchaseItemId&&i.unit===String(line.unit||'').trim().toUpperCase()));
+  const order=candidates.length===1?candidates[0]:null;const item=order?request.items.find((i:any)=>i.id===order.purchaseItemId):null;if(!order)unresolved++;
+  return {...line,purchaseId:request.id,purchaseItemId:item?.id||'',orderLineId:order?.id||'',materialId:item?.materialId||''};
+ });
+ return {...invoice,project:request.project,orderNumber,items,warnings:[...(invoice.warnings||[]),...(unresolved?[unresolved+' linha(s) precisam de conferência do item da requisição e do pedido. Se a linha não pertence a esta RC, selecione Entrada sem RC ou outra requisição.']:[])]};
+}
