@@ -25,3 +25,11 @@ Modelo da extração: gpt-4.1-mini, Responses API com saída estruturada.
 ## Limites da primeira versão
 
 O estado é persistido em um documento transacional com limite de 4 MB. Operações maiores exigirão normalização em tabelas antes de ampliar o volume. O site inicia com acesso privado do proprietário. Não há estoque fictício pré-carregado.
+
+## Requisições e saídas
+
+- Busca por código, descrição, obra, prateleira e unidade, sem diferenciar acentos ou ordem das palavras.
+- Requisições com múltiplos materiais da mesma obra, solicitante, destino e observações.
+- Solicitar cria uma requisição pendente e não reserva nem baixa saldo. A retirada exige conferência e confirmação separadas.
+- O atendimento valida o saldo de todos os itens e grava a baixa integral com controle de concorrência. Requisições atendidas ou canceladas não podem ser processadas novamente.
+- O histórico registra o número da requisição, solicitante, destino e responsável pela entrega.

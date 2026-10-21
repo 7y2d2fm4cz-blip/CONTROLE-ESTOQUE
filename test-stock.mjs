@@ -3,7 +3,7 @@ import ts from 'typescript';
 import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 // Reject damaged UTF-8 before building or publishing user-facing text.
-for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','README.md']) {
+for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','README.md']) {
  const text=new TextDecoder('utf-8',{fatal:true}).decode(fs.readFileSync(path));
  assert.ok(!text.includes('\uFFFD'),`Texto com caracteres corrompidos: ${path}`);
  assert.ok(!/Ã[\u0080-\u00bf]|Â[\u0080-\u00bf]|â[\u0080-\u00bf]/u.test(text),`Codificação duplicada: ${path}`);
@@ -47,3 +47,48 @@ r=await send({action:'project',name:'Segunda obra'});assert.equal(r.status,200);
 r=await send({action:'shelf',name:'A-02',project:'Segunda obra'});assert.equal(r.status,200);
 assert.equal(r.body.shelves.filter(s=>s.name==='A-02').length,2);
 console.log('PASS: prateleiras exigem obra válida e permitem nomes iguais em obras diferentes.');
+
+// Search must handle accents, word order, fragments and formatted material codes.
+const searchSource=fs.readFileSync('lib/material-search.ts','utf8');
+const searchCompiled=ts.transpileModule(searchSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+const {matchesMaterial,searchMaterials}=await import('data:text/javascript;base64,'+Buffer.from(searchCompiled).toString('base64'));
+const sample={code:'CB-001.16',description:'Cabo elétrico de cobre 16 mm²',project:'Obra São João',location:'Prateleira A-02',unit:'M'};
+for(const query of ['eletrico cabo','COBRE 16','sao joao','cb00116','A02 cabo','  cabo   cobre  '])assert.ok(matchesMaterial(sample,query),query);
+assert.ok(!matchesMaterial(sample,'cabo aluminio'));
+assert.equal(searchMaterials([{...sample,id:'other',code:'X'},{...sample,id:'exact'}],'CB00116')[0].id,'exact');
+console.log('PASS: busca sem acentos, palavras fora de ordem e códigos com separadores.');
+
+// Multiple-item requisitions: pending requests never change stock or reserve it.
+r=await send({action:'receive',invoice:{...invoice,number:'REQ-TEST',items:[{...invoice.items[0],code:'CON-002',description:'Conector elétrico',unit:'UN',qty:10,price:5}]}});assert.equal(r.status,200);
+const secondId=r.body.materials.find(m=>m.code==='CON-002').id;
+const beforeRequest=await (await api.GET()).json();
+const requestBody={action:'request',person:'João',reference:'Montagem — Área 2',items:[{materialId:id,qty:4},{materialId:secondId,qty:3}]};
+for(const items of [[],[{materialId:id,qty:0}],[{materialId:id,qty:-1}],[{materialId:id,qty:Infinity}],[{materialId:'missing',qty:1}],[{materialId:secondId,qty:11}],[{materialId:id,qty:1},{materialId:id,qty:1}]]){
+ r=await send({...requestBody,items});assert.equal(r.status,400);assert.equal((await (await api.GET()).json()).version,v);
+}
+r=await send({...requestBody,person:' '});assert.equal(r.status,400);
+const otherMaterial=beforeRequest.materials.find(m=>m.project==='Obra renomeada');
+r=await send({...requestBody,items:[{materialId:id,qty:1},{materialId:otherMaterial.id,qty:1}]});assert.equal(r.status,400);
+r=await send(requestBody);assert.equal(r.status,200);const requestId=r.body.requests[0].id;
+assert.match(r.body.requests[0].number,/^RQ-\d{6,}$/);assert.equal(r.body.requests[0].status,'Pendente');
+assert.deepEqual(r.body.materials,beforeRequest.materials);assert.deepEqual(r.body.moves,beforeRequest.moves);
+const requestVersion=v;
+r=await send({...requestBody,items:[{materialId:id,qty:2},{materialId:secondId,qty:10}]});assert.equal(r.status,200);const competingId=r.body.requests[0].id;
+assert.deepEqual(r.body.materials,beforeRequest.materials);
+r=await post({action:'fulfill-request',requestId,version:requestVersion});assert.equal(r.status,400);assert.match(r.body.error,/atualizado/);
+r=await send({action:'fulfill-request',requestId});assert.equal(r.status,200);
+assert.equal(r.body.materials.find(m=>m.id===id).qty,beforeRequest.materials.find(m=>m.id===id).qty-4);
+assert.equal(r.body.materials.find(m=>m.id===secondId).qty,7);
+assert.equal(r.body.requests.find(q=>q.id===requestId).status,'Atendida');
+assert.equal(r.body.moves.filter(m=>m.requestId===requestId).length,2);
+assert.ok(r.body.moves.filter(m=>m.requestId===requestId).every(m=>m.type==='Saída'&&m.person==='João'&&m.requestNumber));
+const afterFulfill=r.body;
+for(const action of ['fulfill-request','cancel-request']){r=await send({action,requestId});assert.equal(r.status,400);}
+r=await send({action:'fulfill-request',requestId:competingId});assert.equal(r.status,400);assert.match(r.body.error,/Saldo insuficiente/);
+assert.deepEqual((await (await api.GET()).json()),afterFulfill); // No partial decrement of the first valid line.
+r=await send({action:'cancel-request',requestId:competingId});assert.equal(r.status,200);assert.equal(r.body.requests.find(q=>q.id===competingId).status,'Cancelada');assert.deepEqual(r.body.materials,afterFulfill.materials);
+r=await send({action:'fulfill-request',requestId:competingId});assert.equal(r.status,400);
+r=await send({...requestBody,items:[{materialId:otherMaterial.id,qty:1}]});assert.equal(r.status,200);const renameRequestId=r.body.requests[0].id;
+r=await send({action:'project',id:projectId,name:'Obra final'});assert.equal(r.status,200);assert.equal(r.body.requests.find(q=>q.id===renameRequestId).project,'Obra final');
+r=await send({action:'fulfill-request',requestId:renameRequestId});assert.equal(r.status,200);
+console.log('PASS: requisição sem baixa, saldo concorrente, atendimento integral, histórico, cancelamento, renomeação e bloqueio de duplicidade.');
