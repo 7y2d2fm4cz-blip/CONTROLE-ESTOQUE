@@ -33,7 +33,7 @@ else if(b.action==='create-purchase'){
  const purchase=createPurchase(d,user,b,v+1,now);
  for(const i of purchase.items){if(i.materialId){const r=d.replenishments.find((r:any)=>r.materialId===i.materialId&&isOpenReplenishment(r));if(r&&!r.purchaseRequestId){r.purchaseRequestId=purchase.id;r.qty=i.qty;r.status='Solicitada';r.requestedAt=now;r.requestedBy=user.displayName;}}}
 }
-else if(b.action==='approve-purchase'||b.action==='reject-purchase'){decidePurchase(d,user,b,now);}
+else if(b.action==='approve-purchase'||b.action==='reject-purchase'){decidePurchase(d,user,b,now,canPerform(d,user,'manage-user'));}
 else if(b.action==='record-purchase'){recordPurchase(d,user,b,now);}
 else if(b.action==='update-purchase'||b.action==='cancel-purchase'){updatePurchase(d,user,b,now);}
 else if(b.action==='set-minimum'){

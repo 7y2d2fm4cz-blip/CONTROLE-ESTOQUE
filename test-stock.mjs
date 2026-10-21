@@ -272,7 +272,12 @@ globalThis.__testUser=supplyUser;view=await get();assert.equal(view.body.session
 for(const action of ['approve-purchase','receive','manage-user','fulfill-request']){r=await send({action});assert.equal(r.status,403);}
 globalThis.__testUser=adminUser;
 r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Segregação do administrador',items:[{description:'Teste segregação',unit:'UN',qty:1}]});assert.equal(r.status,200);const selfId=r.body.purchaseRequests[0].id;
-const beforeSelf=persisted();r=await send({action:'approve-purchase',purchaseId:selfId});assert.equal(r.status,400);assert.match(r.body.error,/outra pessoa/);assert.equal(persisted(),beforeSelf);
+const beforeSelf=JSON.parse(persisted());assert.equal(purchaseQueue(beforeSelf.purchaseRequests.find(p=>p.id===selfId),'approval',adminUser.userId,true),true);
+r=await send({action:'approve-purchase',purchaseId:selfId});assert.equal(r.status,200);const selfApproved=JSON.parse(persisted()).purchaseRequests.find(p=>p.id===selfId);assert.equal(selfApproved.status,'Aprovada');assert.equal(selfApproved.approvedById,adminUser.userId);assert.equal(selfApproved.selfApprovedByAdmin,true);assert.equal(selfApproved.history[0].byId,adminUser.userId);assert.deepEqual(JSON.parse(persisted()).materials,beforeSelf.materials);assert.deepEqual(JSON.parse(persisted()).moves,beforeSelf.moves);assert.equal((await download(selfId)).status,200);
+globalThis.__testUser=fixtureApprover;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Não administrador não decide a própria RC',items:[{description:'Teste de segregação do aprovador',unit:'UN',qty:1}]});assert.equal(r.status,200);const approverOwnId=r.body.purchaseRequests.find(p=>p.createdById===fixtureApprover.userId&&p.reference==='Não administrador não decide a própria RC').id;
+assert.equal(purchaseQueue(JSON.parse(persisted()).purchaseRequests.find(p=>p.id===approverOwnId),'approval',fixtureApprover.userId),false);
+for(const action of ['approve-purchase','reject-purchase']){const unchanged=persisted();r=await send({action,purchaseId:approverOwnId,note:'Tentativa com perfil do cliente',role:'admin',isAdmin:true,allowOwnApproval:true});assert.equal(r.status,400);assert.match(r.body.error,/outra pessoa/);assert.equal(persisted(),unchanged);}
+
 globalThis.__testUser=stranger;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Compra e entrega parcial em duas linhas',items:[{materialId:id,qty:10},{description:'Válvula nova',code:'VL-NOVA',unit:'UN',qty:5}]});assert.equal(r.status,200);const flowId=r.body.purchaseRequests[0].id;
 const flow=()=>JSON.parse(persisted()).purchaseRequests.find(p=>p.id===flowId);
 const lineA=flow().items[0].id,lineB=flow().items[1].id;
@@ -307,7 +312,7 @@ for(const i of flow().items){const p=purchaseItemProgress(flow(),i);assert.equal
 unchanged=persisted();r=await send({action:'receive',invoice:{...receipt,number:'FLOW-NF5',orderNumber:'PC-F2',items:[receiveLine(lineA,orderLast,1)]}});assert.equal(r.status,400);assert.equal(persisted(),unchanged);
 globalThis.__testUser=supplyUser;assert.equal((await download(flowId)).status,200);
 const legacy={status:'Encerrada',approvedAt:'2025-01-01',approvedById:'legacy',items:[{id:'legacy-line',qty:2}]};const legacyData={purchaseRequests:[legacy]};globalThis.__testPurchases.refreshPurchaseFulfillment(legacyData,new Date().toISOString(),adminUser);assert.equal(legacy.receipts,undefined);assert.equal(legacy.closedByReceiving,undefined);
-console.log('PASS: Suprimentos, aprovação por outra pessoa, filas por responsabilidade, compras e entregas parciais, vinculação NF/RC/item/pedido, saldo por pedido, limites, duplicidade, concorrência, atomicidade e encerramento exclusivo por entrada integral.');
+console.log('PASS: Suprimentos, aprovação própria somente para administrador, bloqueio de perfil forjado, aprovação por outra pessoa para Aprovador, filas por responsabilidade, compras e entregas parciais, vinculação NF/RC/item/pedido, saldo por pedido, limites, duplicidade, concorrência, atomicidade e encerramento exclusivo por entrada integral.');
 
 // Batch material registration validates the same rows in preview and at the API boundary.
 const {parseMaterialCsv,materialRowsFromGrid,planMaterialImport}=globalThis.__testImport;

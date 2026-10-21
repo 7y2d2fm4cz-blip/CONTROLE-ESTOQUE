@@ -36,7 +36,7 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 
 ## Perfis de acesso
 
-- Administrador: todas as operações (a aprovação da própria compra é bloqueada), cadastro/aprovação/bloqueio de usuários e histórico de alterações de acesso. O proprietário atual é o administrador inicial; não existe promoção automática do primeiro visitante.
+- Administrador: todas as operações (inclusive aprovação da própria compra para testes), cadastro/aprovação/bloqueio de usuários e histórico de alterações de acesso. O proprietário atual é o administrador inicial; não existe promoção automática do primeiro visitante.
 - Requisitante: consulta de materiais e saldos, criação de requisições, acompanhamento e cancelamento das próprias requisições pendentes. Não recebe custos, notas fiscais, lista de usuários nem requisições de terceiros nas respostas da API.
 - Suprimentos: consulta todas as RCs aprovadas e registra fornecedor, pedido, item, quantidade comprada e previsão de entrega. Não aprova compras, recebe notas, administra usuários ou consulta custos.
 - Aprovador: analisa solicitações de outra pessoa; não compra nem recebe materiais.
@@ -67,7 +67,7 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 
 ## Aprovação de compras e PDF
 
-- O administrador atribui o perfil Aprovador na aba Usuários. O aprovador consulta todas as RCs e decide aprovação/reprovação, sem administrar pessoas, visualizar custos/notas ou movimentar estoque. Administrador também pode aprovar solicitações de outras pessoas.
+- O administrador atribui o perfil Aprovador na aba Usuários. O aprovador consulta todas as RCs e decide aprovação/reprovação, sem administrar pessoas, visualizar custos/notas ou movimentar estoque. Administrador também pode aprovar as próprias solicitações, com autoria registrada.
 - Fluxo: Requisitante -> Aprovador (outra pessoa) -> Suprimentos -> Almoxarife. A reprovação exige justificativa. Quantidades parciais permanecem pendentes até o recebimento integral.
 - Nome, identidade, data/hora e observação da decisão ficam no histórico. A aprovação e a exportação não alteram estoque.
 - O servidor bloqueia compras, recebimentos vinculados e PDF enquanto não existir aprovação registrada; bloqueia encerramento manual em qualquer etapa. RCs antigas em andamento sem registro de aprovação precisam ser analisadas antes de avançar; históricos encerrados não recebem aprovação retroativa automática.
@@ -107,3 +107,5 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 - A aba Manual e ajuda fica no grupo Ajuda para todos os perfis ativos. Contém índice, pesquisa sem acentos, filtro por assunto e controles de expandir/recolher os tópicos.
 - Conteúdo: primeiro acesso privado e usuários, perfis e filas, obras/prateleiras/materiais, planilhas, retirada, criação/aprovação/PDF da RC, pedidos parciais, notas e sugestões de vínculo, conciliação de entregas, mínimo, situações/cancelamentos, rastreabilidade, problemas frequentes e rotina por responsável.
 - O manual descreve as permissões e limites da interface atual e inclui exemplo numérico de compra/entrega parcial. Não executa operações nem altera dados; filtros de obra não restringem o conteúdo da ajuda.
+
+- Exceção do administrador: pode criar e aprovar a própria RC. A autorização é derivada do perfil ativo no servidor; campos enviados pelo cliente não concedem essa exceção. A fila Aprovações e os detalhes exibem a ação para o administrador; Aprovador permanece impedido de decidir as próprias. O histórico identifica a aprovação pelo mesmo administrador.

@@ -38,15 +38,15 @@ export function updatePurchase(data:any,user:any,body:any,now:string){
  for(const r of data.replenishments||[]){if(r.purchaseRequestId===request.id){r.status='Cancelada';r.closedAt=now;r.closedBy=user.displayName;}}
 }
 
-export function decidePurchase(data:any,user:any,body:any,now:string){
+export function decidePurchase(data:any,user:any,body:any,now:string,isAdmin=false){
  const request=data.purchaseRequests.find((p:any)=>p.id===body.purchaseId);
  if(!request||!needsPurchaseApproval(request))throw Error('Esta requisição não está aguardando aprovação.');
- if(request.createdById===user.userId)throw Error('A aprovação deve ser realizada por outra pessoa. Você não pode decidir a própria requisição.');
+ if(request.createdById===user.userId&&!isAdmin)throw Error('A aprovação deve ser realizada por outra pessoa. Você não pode decidir a própria requisição.');
  const note=String(body.note??'').trim().slice(0,500);const approved=body.action==='approve-purchase';
  if(!approved&&!note)throw Error('Informe a justificativa da reprovação.');
  request.history??=[];request.history.unshift({date:now,by:user.displayName,byId:user.userId,status:approved?'Aprovada':'Reprovada',note});
  request.status=approved?'Aprovada':'Reprovada';request.updatedAt=now;request.updatedBy=user.displayName;
- if(approved){request.approvedAt=now;request.approvedBy=user.displayName;request.approvedById=user.userId;request.approvalNote=note;}
+ if(approved){request.selfApprovedByAdmin=!!isAdmin&&request.createdById===user.userId;request.approvedAt=now;request.approvedBy=user.displayName;request.approvedById=user.userId;request.approvalNote=note;}
  else{request.rejectedAt=now;request.rejectedBy=user.displayName;request.rejectedById=user.userId;request.rejectionNote=note;for(const r of data.replenishments||[]){if(r.purchaseRequestId===request.id){r.status='Cancelada';r.closedAt=now;r.closedBy=user.displayName;}}}
 }
 
@@ -56,9 +56,9 @@ export function purchaseItemProgress(request:any,item:any){
  const received=rounded((request.receipts||[]).filter((r:any)=>r.purchaseItemId===item.id).reduce((sum:number,r:any)=>sum+Number(r.qty),0));
  return {requested:Number(item.qty),purchased,received,toPurchase:Math.max(0,rounded(Number(item.qty)-purchased)),toReceive:Math.max(0,rounded(Number(item.qty)-received)),inTransit:Math.max(0,rounded(purchased-received))};
 }
-export function purchaseQueue(request:any,queue:string,userId:string){
+export function purchaseQueue(request:any,queue:string,userId:string,allowOwnApproval=false){
  if(queue==='mine')return request.createdById===userId;
- if(queue==='approval')return needsPurchaseApproval(request)&&request.createdById!==userId;
+ if(queue==='approval')return needsPurchaseApproval(request)&&(allowOwnApproval||request.createdById!==userId);
  if(queue==='procurement')return isOpenPurchase(request)&&canExportPurchase(request)&&request.items.some((i:any)=>purchaseItemProgress(request,i).toPurchase>0);
  if(queue==='receiving')return isOpenPurchase(request)&&canExportPurchase(request)&&request.items.some((i:any)=>purchaseItemProgress(request,i).inTransit>0);
  return true;
