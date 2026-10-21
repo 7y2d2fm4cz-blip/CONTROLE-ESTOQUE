@@ -109,3 +109,7 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 - O manual descreve as permissões e limites da interface atual e inclui exemplo numérico de compra/entrega parcial. Não executa operações nem altera dados; filtros de obra não restringem o conteúdo da ajuda.
 
 - Exceção do administrador: pode criar e aprovar a própria RC. A autorização é derivada do perfil ativo no servidor; campos enviados pelo cliente não concedem essa exceção. A fila Aprovações e os detalhes exibem a ação para o administrador; Aprovador permanece impedido de decidir as próprias. O histórico identifica a aprovação pelo mesmo administrador.
+
+## Fila de retirada no almoxarifado
+
+- Almoxarifado / Retirada reúne as RQs existentes e novas, com contador de pendências por obra. Administrador e almoxarife iniciam em Pendente e podem selecionar Todos os status para ver o histórico. Solicitantes acompanham os próprios pedidos; permissões e atendimento com baixa integral permanecem inalterados.
