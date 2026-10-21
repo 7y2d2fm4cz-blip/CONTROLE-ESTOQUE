@@ -2,11 +2,11 @@
 import {useState} from 'react';
 import {canExportPurchase,isOpenPurchase,purchaseItemProgress} from '../lib/purchase-requests';
 const qty=(n:number)=>Number(n).toLocaleString('pt-BR',{maximumFractionDigits:3});
-export default function PurchaseExecution({request,session,busy,onSave,onReceive}:{request:any;session:any;busy:boolean;onSave:(body:any)=>Promise<boolean>;onReceive:(request:any)=>void}){
+export default function PurchaseExecution({request,session,busy,onSave,onReceive,purchaseEntry=false}:{purchaseEntry?:boolean;request:any;session:any;busy:boolean;onSave:(body:any)=>Promise<boolean>;onReceive:(request:any)=>void}){
  const [supplier,setSupplier]=useState('');const [orderNumber,setOrderNumber]=useState('');const [expectedDate,setExpectedDate]=useState('');
  const [lines,setLines]=useState<any[]>(request.items.map((i:any,index:number)=>({purchaseItemId:i.id,qty:0,orderItem:String((index+1)*10).padStart(5,'0')})));
  const progress=request.items.map((i:any)=>({item:i,...purchaseItemProgress(request,i)}));
- const canOrder=session.canBuy&&canExportPurchase(request)&&isOpenPurchase(request)&&progress.some((p:any)=>p.toPurchase>0);
+ const canOrder=purchaseEntry&&session.canBuy&&canExportPurchase(request)&&isOpenPurchase(request)&&progress.some((p:any)=>p.toPurchase>0);
  const pendingOrder=(request.orders||[]).some((o:any)=>o.qty>(request.receipts||[]).filter((r:any)=>r.orderLineId===o.id).reduce((s:number,r:any)=>s+r.qty,0));
  const selected=lines.filter(l=>Number(l.qty)>0);const valid=selected.length>0&&supplier.trim()&&orderNumber.trim()&&selected.every(l=>{const p=progress.find((p:any)=>p.item.id===l.purchaseItemId);return Number.isFinite(Number(l.qty))&&Number(l.qty)<=p.toPurchase&&l.orderItem.trim();})&&lines.every(l=>String(l.qty).trim()!==''&&Number.isFinite(Number(l.qty))&&Number(l.qty)>=0);
  return <><h3 className="executionTitle">Acompanhamento por item</h3><div className="tableScroll"><table><thead><tr><th>Material / código</th><th>Requisitado</th><th>Comprado</th><th>Recebido</th><th>Falta comprar</th><th>Falta entregar</th></tr></thead><tbody>{progress.map((p:any)=><tr key={p.item.id}><td><strong>{p.item.description}</strong><small>{p.item.code||'Sem código'} · {p.item.unit}</small></td><td>{qty(p.requested)}</td><td>{qty(p.purchased)}</td><td>{qty(p.received)}</td><td className={p.toPurchase>0?'quantityError':''}>{qty(p.toPurchase)}</td><td className={p.toReceive>0?'quantityError':''}>{qty(p.toReceive)}<small>{qty(p.inTransit)} já comprados a entregar</small></td></tr>)}</tbody></table></div>

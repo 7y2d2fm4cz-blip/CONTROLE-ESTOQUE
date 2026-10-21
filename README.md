@@ -113,3 +113,7 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 ## Fila de retirada no almoxarifado
 
 - Almoxarifado / Retirada reúne as RQs existentes e novas, com contador de pendências por obra. Administrador e almoxarife iniciam em Pendente e podem selecionar Todos os status para ver o histórico. Solicitantes acompanham os próprios pedidos; permissões e atendimento com baixa integral permanecem inalterados.
+
+## Separação da execução de compras
+
+- Suprimentos tem item próprio no grupo Execução de compras da barra lateral. A fila contém somente RCs aprovadas e abertas com quantidade a comprar. Fornecedor e pedido são registrados exclusivamente nesta tela; detalhes abertos em Minhas compras, Aprovações ou histórico são de acompanhamento dessa etapa. A análise fica em Aprovações. Recebimentos fica no grupo Almoxarifado. Permissões no servidor continuam limitadas a Suprimentos e administrador para registrar compras.
