@@ -4,7 +4,7 @@ import ts from 'typescript';
 import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 // Reject damaged UTF-8 before building or publishing user-facing text.
-for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','lib/replenishment.ts','lib/purchase-requests.ts','lib/purchase-pdf.ts','app/api/purchase-pdf/route.ts','components/purchase-management.tsx','components/replenishment-management.tsx','components/access-management.tsx','components/purchase-execution.tsx','components/purchase-receipt-link.tsx','README.md']) {
+for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/material-import.ts','components/material-import.tsx','components/purchase-dialog.tsx','components/invoice-material-suggestions.tsx','lib/access-control.ts','lib/replenishment.ts','lib/purchase-requests.ts','lib/purchase-pdf.ts','app/api/purchase-pdf/route.ts','components/purchase-management.tsx','components/replenishment-management.tsx','components/access-management.tsx','components/purchase-execution.tsx','components/purchase-receipt-link.tsx','README.md']) {
  const text=new TextDecoder('utf-8',{fatal:true}).decode(fs.readFileSync(path));
  assert.ok(!text.includes('\uFFFD'),`Texto com caracteres corrompidos: ${path}`);
  assert.ok(!/Ã[\u0080-\u00bf]|Â[\u0080-\u00bf]|â[\u0080-\u00bf]/u.test(text),`Codificação duplicada: ${path}`);
@@ -22,10 +22,13 @@ globalThis.__testReplenishment=await import('data:text/javascript;base64,'+Buffe
 const accessCompiled=ts.transpileModule(fs.readFileSync('lib/access-control.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 globalThis.__testAccess=await import('data:text/javascript;base64,'+Buffer.from(accessCompiled).toString('base64'));
 
+const importCompiled=ts.transpileModule(fs.readFileSync('lib/material-import.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+globalThis.__testImport=await import('data:text/javascript;base64,'+Buffer.from(importCompiled).toString('base64'));
 let source=fs.readFileSync('app/api/stock/route.ts','utf8').replace(/import \{env\} from 'cloudflare:workers';/, 'const env=globalThis.__testEnv;').replace(/import \{getChatGPTUser\} from '..\/..\/chatgpt-auth';/, 'const getChatGPTUser=async()=>globalThis.__testUser;');
 source=source.replace("import {presentStock,canPerform,bindMember,manageUser,ensureAccess} from '../../../lib/access-control';",'const {presentStock,canPerform,bindMember,manageUser,ensureAccess}=globalThis.__testAccess;');
 source=source.replace("import {syncReplenishments,isBelowMinimum,isOpenReplenishment} from '../../../lib/replenishment';",'const {syncReplenishments,isBelowMinimum,isOpenReplenishment}=globalThis.__testReplenishment;');
 source=source.replace("import {createPurchase,updatePurchase,decidePurchase,recordPurchase,linkPurchaseReceipt,refreshPurchaseFulfillment} from '../../../lib/purchase-requests';",'const {createPurchase,updatePurchase,decidePurchase,recordPurchase,linkPurchaseReceipt,refreshPurchaseFulfillment}=globalThis.__testPurchases;');
+source=source.replace("import {importMaterials} from '../../../lib/material-import';",'const {importMaterials}=globalThis.__testImport;');
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const api=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
 const post=async body=>{const r=await api.POST(new Request('https://stock.test/api/stock',{method:'POST',headers:{origin:'https://stock.test','Content-Type':'application/json'},body:JSON.stringify(body)}));return {status:r.status,body:await r.json()}};
@@ -305,3 +308,43 @@ unchanged=persisted();r=await send({action:'receive',invoice:{...receipt,number:
 globalThis.__testUser=supplyUser;assert.equal((await download(flowId)).status,200);
 const legacy={status:'Encerrada',approvedAt:'2025-01-01',approvedById:'legacy',items:[{id:'legacy-line',qty:2}]};const legacyData={purchaseRequests:[legacy]};globalThis.__testPurchases.refreshPurchaseFulfillment(legacyData,new Date().toISOString(),adminUser);assert.equal(legacy.receipts,undefined);assert.equal(legacy.closedByReceiving,undefined);
 console.log('PASS: Suprimentos, aprovação por outra pessoa, filas por responsabilidade, compras e entregas parciais, vinculação NF/RC/item/pedido, saldo por pedido, limites, duplicidade, concorrência, atomicidade e encerramento exclusivo por entrada integral.');
+
+// Batch material registration validates the same rows in preview and at the API boundary.
+const {parseMaterialCsv,materialRowsFromGrid,planMaterialImport}=globalThis.__testImport;
+const csv='\uFEFFCódigo;Descrição;Unidade;Obra;Prateleira;Estoque mínimo\r\n"000001";"Válvula; aço inox";UN;Obra teste;;"1.000,5"\r\n000002;"Conector ""especial""\nmultilinha";UN;Obra teste;;0\r\n';
+const importedRows=materialRowsFromGrid(parseMaterialCsv(csv));assert.equal(importedRows[0].code,'000001');assert.equal(importedRows[0].description,'Válvula; aço inox');assert.equal(importedRows[1].description,'Conector "especial"\nmultilinha');
+assert.equal(materialRowsFromGrid([['Descrição','Unidade'],['Material padrão','UN']],'Obra teste')[0].project,'Obra teste');
+assert.equal(parseMaterialCsv('Código,Descrição,Unidade\n001,"Cabo, especial",M')[1][1],'Cabo, especial');
+for(const bad of ['A;B\n"unterminated','A;B\n"a"oops;b'])assert.throws(()=>parseMaterialCsv(bad));
+for(const grid of [[],[['Descrição']], [['Descrição','Unidade','Quantidade'],['A','UN',20]], [['Descrição','Descrição','Unidade'],['A','B','UN']], [['Descrição','Unidade']], [['Descrição','Unidade'],...Array.from({length:501},()=>['A','UN'])]])assert.throws(()=>materialRowsFromGrid(grid));
+const snapshot=()=>JSON.parse(persisted());
+globalThis.__testUser=adminUser;const registrationBaseline=snapshot();
+let materialPlan=planMaterialImport(registrationBaseline,importedRows);assert.equal(materialPlan[0].item.minimum,1000.5);assert.equal(materialPlan[0].status,'new');
+for(const actor of [stranger,supplyUser,fixtureApprover]){globalThis.__testUser=actor;r=await send({action:'import-materials',items:importedRows});assert.equal(r.status,403);}
+globalThis.__testUser=warehouseUser;
+for(const bad of [{description:''},{unit:''},{project:'Unknown'},{location:'Missing'},{minimum:'-1'},{minimum:'abc'},{minimum:Infinity},{description:'=CMD()'},{code:[]},{description:'x'.repeat(501)}]){const before=persisted();r=await send({action:'import-materials',items:[importedRows[0],{...importedRows[1],...bad}]});assert.equal(r.status,400);assert.equal(persisted(),before);}
+for(const items of [[],Array.from({length:501},()=>importedRows[0]),[importedRows[0],importedRows[0]]]){const before=persisted();r=await send({action:'import-materials',items});assert.equal(r.status,400);assert.equal(persisted(),before);}
+r=await send({action:'import-materials',items:importedRows});assert.equal(r.status,200);let added=r.body.materials.find(m=>m.code==='000001');assert.equal(added.qty,0);assert.equal(added.average,0);assert.equal(added.minimum,1000.5);assert.equal(added.createdById,warehouseUser.userId);assert.equal(r.body.materials.length,registrationBaseline.materials.length+2);assert.deepEqual(r.body.moves,registrationBaseline.moves);assert.deepEqual(r.body.invoices,registrationBaseline.invoices);assert.deepEqual(r.body.purchaseRequests,registrationBaseline.purchaseRequests);assert.ok(r.body.replenishments.some(p=>p.materialId===added.id&&p.status==='Definir quantidade'));
+const existingItem=r.body.materials.find(m=>m.id===id);const existingRow={code:existingItem.code,description:existingItem.description,unit:existingItem.unit,project:existingItem.project,minimum:999};
+assert.equal(planMaterialImport(snapshot(),[existingRow])[0].status,'existing');
+let before=persisted();r=await send({action:'import-materials',items:importedRows});assert.equal(r.status,400);assert.equal(persisted(),before);
+r=await send({action:'import-materials',items:[existingRow,{code:'IMPORT-03',description:'Novo material importado',unit:'UN',project:'Obra teste',minimum:0}]});assert.equal(r.status,200);assert.deepEqual(r.body.materials.find(m=>m.id===id),existingItem);
+before=persisted();r=await send({action:'import-materials',items:[{...importedRows[0],description:'Outro material com mesmo código'}]});assert.equal(r.status,400);assert.equal(persisted(),before);
+before=persisted();r=await post({action:'import-materials',version:v-1,items:[{description:'Concorrente',unit:'UN',project:'Obra teste'}]});assert.equal(r.status,400);assert.equal(persisted(),before);
+// Downloaded XLSX has one empty input sheet, example kept separately, and preserves accents.
+const templateModule=fs.readFileSync('lib/material-template.ts','utf8');const base64=templateModule.match(/materialTemplateBase64='([^']+)'/)[1];const {readSheet,default:readSheets}=await import('read-excel-file/node');
+const templateBytes=Buffer.from(base64,'base64');const templateGrid=await readSheet(templateBytes);assert.deepEqual(templateGrid[0],['Código','Descrição','Unidade','Obra','Prateleira','Estoque mínimo']);assert.ok(templateGrid.slice(1).every(row=>row.every(x=>x==null)));assert.deepEqual((await readSheets(templateBytes)).map(sheet=>sheet.sheet),['Materiais','Como preencher']);
+const templateRouteSource=fs.readFileSync('app/api/material-template/route.ts','utf8').replace("import {env} from 'cloudflare:workers';",'const env=globalThis.__testEnv;').replace("import {getChatGPTUser} from '../../chatgpt-auth';",'const getChatGPTUser=async()=>globalThis.__testUser;').replace("import {accessSession} from '../../../lib/access-control';",'const {accessSession}=globalThis.__testAccess;').replace("import {materialTemplateBase64} from '../../../lib/material-template';",'const materialTemplateBase64=globalThis.__templateBase64;');
+globalThis.__templateBase64=base64;const templateApi=await import('data:text/javascript;base64,'+Buffer.from(ts.transpileModule(templateRouteSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64'));
+for(const [actor,status] of [[null,401],[stranger,403],[supplyUser,403],[adminUser,200],[warehouseUser,200]]){globalThis.__testUser=actor;const response=await templateApi.GET();assert.equal(response.status,status);if(status===200){assert.match(response.headers.get('content-disposition'),/modelo-materiais.xlsx/);assert.deepEqual(Buffer.from(await response.arrayBuffer()),templateBytes);}}
+// Suggestions are scoped, conservative on numeric specifications and never modify source lines.
+const {suggestInvoiceMaterials}=await import('data:text/javascript;base64,'+Buffer.from(searchCompiled).toString('base64'));
+const invoiceLine={description:'Cabo cobre flex 16 mm²',unit:'M',code:'FORN-99'};const invoiceUnchanged=JSON.stringify(invoiceLine);
+const suggestionsFixture=[{id:'correct',description:'Cabo flexível de cobre 16 mm2',unit:'M',project:'Obra teste',code:'CB-16'},{id:'wrong-size',description:'Cabo flexível de cobre 25 mm2',unit:'M',project:'Obra teste',code:'CB-25'},{id:'wrong-unit',description:invoiceLine.description,unit:'UN',project:'Obra teste'},{id:'wrong-project',description:invoiceLine.description,unit:'M',project:'Outra obra'}];
+let suggestions=suggestInvoiceMaterials(suggestionsFixture,invoiceLine,'Obra teste');assert.equal(suggestions[0].material.id,'correct');assert.equal(suggestions.length,1);assert.equal(JSON.stringify(invoiceLine),invoiceUnchanged);
+assert.equal(suggestInvoiceMaterials(suggestionsFixture,invoiceLine,'').length,0);assert.equal(suggestInvoiceMaterials(suggestionsFixture,{...invoiceLine,description:'Parafuso aço 10 mm'},'Obra teste').length,0);
+assert.equal(suggestInvoiceMaterials(suggestionsFixture,{description:'Fio cobre 16mm2',code:'CB16',unit:'M'},'Obra teste')[0].reason,'Mesmo código');
+// Accepting a suggested link updates the canonical balance, retaining the NF wording and avoiding a duplicate material.
+globalThis.__testUser=warehouseUser;const canonical=snapshot().materials.find(m=>m.id===id);const materialCount=snapshot().materials.length;
+r=await send({action:'receive',invoice:{...invoice,number:'MATCH-NF-01',items:[{...invoice.items[0],description:canonical.description+' - descrição do fornecedor',materialId:id,qty:2,unit:canonical.unit}]}});assert.equal(r.status,200);assert.equal(r.body.materials.length,materialCount);assert.equal(r.body.materials.find(m=>m.id===id).qty,canonical.qty+2);assert.equal(r.body.materials.find(m=>m.id===id).description,canonical.description);assert.match(r.body.invoices[0].items[0].description,/fornecedor/);
+console.log('PASS: modelo XLSX protegido e vazio, CSV com acentos/aspas, importação em lote sem saldo, validação, duplicidade, conflitos, permissões, concorrência, atomicidade e sugestão conservadora de materiais com vínculo confirmado.');

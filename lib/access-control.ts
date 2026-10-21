@@ -44,7 +44,7 @@ export function canPerform(data:any,user:ChatGPTUser,action:string,requestId?:st
  if(action==='request'||action==='create-purchase')return true;
  if(action==='cancel-purchase')return session.role==='admin'||session.canBuy||(data.purchaseRequests||[]).some((p:any)=>p.id===requestId&&p.createdById===user.userId&&['Solicitada','Aguardando aprovação'].includes(p.status));
  if(action==='cancel-request')return session.canOperateStock||data.requests.some((r:any)=>r.id===requestId&&r.createdById===user.userId);
- return session.canOperateStock&&['receive','out','material','project','shelf','fulfill-request','extract','set-minimum','start-replenishment','submit-replenishment','close-replenishment'].includes(action);
+ return session.canOperateStock&&['receive','out','import-materials','material','project','shelf','fulfill-request','extract','set-minimum','start-replenishment','submit-replenishment','close-replenishment'].includes(action);
 }
 
 export function bindMember(data:any,user:ChatGPTUser) {

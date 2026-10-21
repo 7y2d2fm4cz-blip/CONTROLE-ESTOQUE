@@ -86,3 +86,17 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 - Pedido, recebimento, estoque, movimento, NF e encerramento são persistidos com a mesma transação otimista. Nota duplicada, versão desatualizada ou qualquer linha inválida impedem o lançamento inteiro. O histórico mantém identidade, data, NF e quantidades.
 - Histórico encerrado no fluxo anterior permanece preservado e identificado sem presumir entregas ou criar recebimentos retroativos.
 - Atribua o perfil Suprimentos em Usuários usando a conta real da pessoa responsável. O cadastro interno não cria uma conta ChatGPT nem altera os convites do site privado.
+
+## Cadastro por planilha e conciliação de nomenclaturas
+
+- Cadastros / Materiais permite baixar o modelo XLSX e selecionar XLSX ou CSV UTF-8 (até 5 MB / 500 linhas). A aba Materiais do modelo fica vazia; exemplos e instruções ficam separados em Como preencher.
+- Colunas: Código, Descrição, Unidade, Obra, Prateleira e Estoque mínimo. Descrição/unidade são obrigatórias; obra pode vir do filtro atual quando a célula estiver vazia. Obra e prateleira informadas devem existir.
+- A prévia distingue novos, existentes e erros por linha. Qualquer erro bloqueia o lote inteiro. Código conflitante e repetição no arquivo são rejeitados; cadastros já existentes são ignorados sem alterar descrições, mínimos ou saldos. O servidor repete a validação com controle de versão antes da gravação.
+- Administrador e almoxarife importam. Materiais novos recebem saldo e custo zero, autoria e data. Mínimo positivo pode gerar sugestão de reposição; nenhuma nota/movimentação é criada pela importação.
+- Na conferência da NF, aparecem até três sugestões de materiais da mesma obra e unidade. A busca considera código, acentos, ordem das palavras e algumas abreviações. Especificações numéricas divergentes bloqueiam a sugestão. Similaridade de nome é apenas sugestão; o usuário confirma Usar este material e confere a especificação.
+- O vínculo confirmado soma a entrada ao material existente e preserva a descrição original da NF. Linhas vinculadas à compra usam o material da própria RC. Nenhuma associação de material é feita automaticamente pela similaridade.
+
+## Organização da interface
+
+- Nova RC e detalhes/análise da compra abrem em janela modal, com o padrão visual das requisições de retirada. A janela mantém busca, materiais novos, quantidades e origem do mínimo, além do fluxo de aprovação/compra/recebimento. Erros aparecem dentro da janela; Escape/fechar ficam bloqueados durante gravação.
+- Menu agrupado em Painel, Solicitações, Fluxo de compras, Almoxarifado e Administração. A ordem operacional é solicitar, aprovar, comprar e receber; as permissões e contadores de pendências permanecem por perfil.
