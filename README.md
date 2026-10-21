@@ -52,3 +52,13 @@ O estado é persistido em um documento transacional com limite de 4 MB. Operaç�
 - Rascunhos são regularizados automaticamente quando o saldo atinge o mínimo ou o monitoramento é desativado. Requisições já solicitadas permanecem no histórico e são encerradas pelo responsável após a regularização.
 - Nova queda após encerramento/regularização gera novo rascunho. O histórico é preservado.
 - A aba exibe contador de alertas. A tela atualiza os saldos ao recuperar foco, manualmente ou a cada minuto enquanto estiver visível e sem operação em andamento.
+
+## Requisições de compras (RC)
+
+- Compras e retiradas têm abas e registros distintos. Uma RC pode reunir múltiplos materiais da mesma obra, incluindo materiais novos não cadastrados no estoque. A criação da RC não cadastra automaticamente um saldo/material.
+- A aba Requisições de compras mostra sugestões após as baixas: quantidade sugerida = máximo entre zero e (mínimo - saldo atual), com ajuste antes da confirmação. Saldo igual ao mínimo não gera sugestão.
+- Uma compra aberta para o material é exibida no alerta. A geração pela sugestão é bloqueada quando já existe RC aberta para o item; compras manuais adicionais são explícitas.
+- Situações: Solicitada, Em compra, Encerrada e Cancelada. Encerramento/cancelamento exige referência ou justificativa e gera histórico. Encerrar um processo não declara nem registra recebimento.
+- Requisitante cria/acompanha suas próprias RCs e cancela somente as próprias ainda Solicitadas. Administrador e almoxarife veem todas, conduzem e encerram compras.
+- Compras não alteram saldo nem enviam pedidos a fornecedores. Entradas continuam pela nota fiscal; se uma compra for encerrada com saldo ainda baixo, a necessidade de recomposição continua visível.
+- A definição de mínimos fica em Estoque mínimo. Registros RP anteriores permanecem no histórico, vinculados a RC quando houver conversão.

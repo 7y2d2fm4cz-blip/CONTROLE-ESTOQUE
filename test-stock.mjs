@@ -3,7 +3,7 @@ import ts from 'typescript';
 import {DatabaseSync} from 'node:sqlite';
 import assert from 'node:assert/strict';
 // Reject damaged UTF-8 before building or publishing user-facing text.
-for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','lib/replenishment.ts','components/replenishment-management.tsx','components/access-management.tsx','README.md']) {
+for (const path of ['app/page.tsx','app/api/stock/route.ts','app/api/extract/route.ts','components/stock-requisition.tsx','components/requisition-history.tsx','lib/material-search.ts','lib/access-control.ts','lib/replenishment.ts','lib/purchase-requests.ts','components/purchase-management.tsx','components/replenishment-management.tsx','components/access-management.tsx','README.md']) {
  const text=new TextDecoder('utf-8',{fatal:true}).decode(fs.readFileSync(path));
  assert.ok(!text.includes('\uFFFD'),`Texto com caracteres corrompidos: ${path}`);
  assert.ok(!/Ã[\u0080-\u00bf]|Â[\u0080-\u00bf]|â[\u0080-\u00bf]/u.test(text),`Codificação duplicada: ${path}`);
@@ -14,6 +14,8 @@ const db={prepare(sql){return {bind(...values){return {async first(){return sqli
 globalThis.__testEnv={DB:db};
 const adminUser={displayName:'Teste',userId:'test',email:'69tjwwwnrj@privaterelay.appleid.com',fullName:'Teste'};
 globalThis.__testUser=adminUser;
+const purchaseCompiled=ts.transpileModule(fs.readFileSync('lib/purchase-requests.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+globalThis.__testPurchases=await import('data:text/javascript;base64,'+Buffer.from(purchaseCompiled).toString('base64'));
 const replenishmentCompiled=ts.transpileModule(fs.readFileSync('lib/replenishment.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 globalThis.__testReplenishment=await import('data:text/javascript;base64,'+Buffer.from(replenishmentCompiled).toString('base64'));
 const accessCompiled=ts.transpileModule(fs.readFileSync('lib/access-control.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
@@ -22,6 +24,7 @@ globalThis.__testAccess=await import('data:text/javascript;base64,'+Buffer.from(
 let source=fs.readFileSync('app/api/stock/route.ts','utf8').replace(/import \{env\} from 'cloudflare:workers';/, 'const env=globalThis.__testEnv;').replace(/import \{getChatGPTUser\} from '..\/..\/chatgpt-auth';/, 'const getChatGPTUser=async()=>globalThis.__testUser;');
 source=source.replace("import {presentStock,canPerform,bindMember,manageUser,ensureAccess} from '../../../lib/access-control';",'const {presentStock,canPerform,bindMember,manageUser,ensureAccess}=globalThis.__testAccess;');
 source=source.replace("import {syncReplenishments,isBelowMinimum,isOpenReplenishment} from '../../../lib/replenishment';",'const {syncReplenishments,isBelowMinimum,isOpenReplenishment}=globalThis.__testReplenishment;');
+source=source.replace("import {createPurchase,updatePurchase} from '../../../lib/purchase-requests';",'const {createPurchase,updatePurchase}=globalThis.__testPurchases;');
 const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const api=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
 const post=async body=>{const r=await api.POST(new Request('https://stock.test/api/stock',{method:'POST',headers:{origin:'https://stock.test','Content-Type':'application/json'},body:JSON.stringify(body)}));return {status:r.status,body:await r.json()}};
@@ -180,3 +183,32 @@ globalThis.__testUser=warehouseUser;r=await send({action:'set-minimum',materialI
 r=await send({action:'submit-replenishment',replenishmentId:warehouseDraft.id,qty:5});assert.equal(r.status,200);
 globalThis.__testUser=adminUser;
 console.log('PASS: mínimo estrito, alerta automático, quantidade a definir, prevenção de duplicidade, reposição sem alterar saldo, recebimento, novo ciclo e permissões.');
+
+// Purchase requisitions are independent from withdrawals; minimum suggestions are live shortfalls.
+const {minimumShortfall,isOpenPurchase}=globalThis.__testPurchases;
+assert.equal(minimumShortfall({minimum:100,qty:35}),65);assert.equal(minimumShortfall({minimum:10,qty:10}),0);assert.equal(minimumShortfall({minimum:0,qty:0}),0);assert.equal(minimumShortfall({minimum:0.3,qty:0.1}),0.2);
+const purchaseBefore=(await get()).body;const itemForPurchase=purchaseBefore.materials.find(m=>m.id===id);
+const purchaseBody={action:'create-purchase',project:itemForPurchase.project,reference:'Recomposição do mínimo',priority:'Normal',items:[{materialId:id,qty:5,fromMinimum:true},{description:'Ferramenta nova',code:'F-01',unit:'UN',qty:2}]};
+for(const bad of [{items:[]},{project:'Obra inexistente'},{reference:''},{items:[{materialId:'unknown',qty:1}]},{items:[{materialId:id,qty:0}]},{items:[{materialId:id,qty:-1}]},{items:[{materialId:id,qty:null}]},{items:[{materialId:id,qty:1},{materialId:id,qty:2}]},{items:[{description:'',unit:'UN',qty:1}]},{items:[{materialId:otherMaterial.id,qty:1}]}]){r=await send({...purchaseBody,...bad});assert.equal(r.status,400);}
+r=await send(purchaseBody);assert.equal(r.status,200);const purchase=r.body.purchaseRequests[0];assert.match(purchase.number,/^RC-/);assert.equal(purchase.items.length,2);assert.equal(purchase.items[0].fromMinimum,true);assert.equal(purchase.items[1].materialId,'');assert.equal(purchase.createdById,adminUser.userId);assert.equal(purchase.status,'Solicitada');
+assert.deepEqual(r.body.materials,purchaseBefore.materials);assert.deepEqual(r.body.moves,purchaseBefore.moves);assert.deepEqual(r.body.invoices,purchaseBefore.invoices);
+assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.purchaseRequestId===purchase.id));
+r=await send(purchaseBody);assert.equal(r.status,400);assert.match(r.body.error,/compra aberta/);
+r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Invalid'});assert.equal(r.status,400);
+r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Em compra',note:'Cotação em andamento'});assert.equal(r.status,200);assert.ok(isOpenPurchase(r.body.purchaseRequests[0]));
+r=await send({action:'update-purchase',purchaseId:purchase.id,status:'Encerrada',note:''});assert.equal(r.status,400);
+r=await send({action:'cancel-purchase',purchaseId:purchase.id,note:'Revisar quantidade'});assert.equal(r.status,200);assert.equal(r.body.purchaseRequests[0].status,'Cancelada');assert.deepEqual(r.body.materials,purchaseBefore.materials);
+assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.status==='Definir quantidade'&&!q.purchaseRequestId));
+r=await send({...purchaseBody,items:[{materialId:id,qty:8,fromMinimum:true}]});assert.equal(r.status,200);const replacementPurchase=r.body.purchaseRequests[0];assert.equal(replacementPurchase.items[0].qty,8); // Suggested quantity remains editable.
+r=await send({action:'update-purchase',purchaseId:replacementPurchase.id,status:'Encerrada',note:'Processo encerrado para revisão, sem recebimento'});assert.equal(r.status,200);assert.deepEqual(r.body.materials,purchaseBefore.materials);assert.ok(r.body.replenishments.some(q=>q.materialId===id&&q.status==='Definir quantidade'));
+globalThis.__testUser=warehouseUser;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Compra do almoxarife',items:[{materialId:id,qty:4}]});assert.equal(r.status,200);const warehousePurchase=r.body.purchaseRequests[0];
+globalThis.__testUser=stranger;r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Necessidade nova',items:[{description:'Bancada nova',unit:'UN',qty:1}]});assert.equal(r.status,200);const requesterPurchase=r.body.purchaseRequests[0];assert.ok(r.body.purchaseRequests.every(p=>p.createdById===stranger.userId));assert.ok(!r.body.purchaseRequests.some(p=>p.id===warehousePurchase.id));
+r=await send({action:'update-purchase',purchaseId:requesterPurchase.id,status:'Em compra'});assert.equal(r.status,403);
+r=await send({action:'cancel-purchase',purchaseId:warehousePurchase.id,note:'Tentativa indevida'});assert.equal(r.status,403);
+r=await send({action:'cancel-purchase',purchaseId:requesterPurchase.id,note:'Necessidade cancelada'});assert.equal(r.status,200);
+r=await send({action:'create-purchase',project:itemForPurchase.project,reference:'Outra compra',items:[{description:'Item avulso',unit:'UN',qty:1}]});assert.equal(r.status,200);const committedPurchase=r.body.purchaseRequests[0];
+globalThis.__testUser=adminUser;r=await send({action:'update-purchase',purchaseId:committedPurchase.id,status:'Em compra'});assert.equal(r.status,200);
+globalThis.__testUser=stranger;r=await send({action:'cancel-purchase',purchaseId:committedPurchase.id,note:'Em andamento'});assert.equal(r.status,403);
+globalThis.__testUser=reader;r=await send(purchaseBody);assert.equal(r.status,403);assert.deepEqual((await get()).body.purchaseRequests,[]);
+globalThis.__testUser=adminUser;
+console.log('PASS: compras com múltiplos itens e materiais novos, sugestão mínimo menos saldo, quantidade editável, duplicidade, histórico, cancelamento, segregação e nenhum efeito no estoque.');
